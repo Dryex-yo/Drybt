@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Gojek Bug Bounty Hunter - DRYBT Integration
-Username: Dryex
+Harman International Bug Bounty Hunter - DRYBT Integration
+User-Agent: BugBounty-Harman
+Cookie session siap pakai
 Module: param_discovery, open_redirect, sqli, lfi, race_condition, ssrf, xss, csrf, cors, dir_traversal
-Timeout: 1800 detik (30 menit) per module
 """
 
 import subprocess
@@ -14,49 +14,67 @@ import json
 from datetime import datetime
 
 # ===== KONFIGURASI =====
-YWH_USERNAME = "Dryex"
-USER_AGENT_HEADER = f"X-YesWeHack-Research: {YWH_USERNAME}"
+USER_AGENT = "BugBounty-Harman"
+
+# ===== MASUKKAN COOKIE SESSION KAMU DI SINI =====
+# Copy dari DevTools → Application → Cookies → session
+SESSION_COOKIE = "eyJfcGVybWFuZW50Ijp0cnVlfQ.HO450Q.PZK__GQhNHYDW3QO98HlqO6EWl8"
+# GANTI dengan value session asli kamu!
+
+# Cookie lain (opsional, dari gambar DevTools kamu)
+UUID_COOKIE = "abo0JspXOtjuvFduY35OXB1Yfl"  # Ganti dengan uuid kamu jika perlu
+MIUD_COOKIE = "1833A9B1288A62DF330BBEAE29B563AD"  # Ganti dengan MIUD kamu jika perlu
+
+# Gabungkan semua cookie
+COOKIE_STRING = f"session={SESSION_COOKIE}; uuid={UUID_COOKIE}; MIUD={MIUD_COOKIE}"
+
 DRYBT_MAIN = "main.py"
 RATE_DELAY = 0.2  # 5 request/detik
-TIMEOUT = 1800     # 30 menit per module (maksimal)
+TIMEOUT = 1800    # 30 menit per module
 
-# 10 Module sesuai permintaan
+# 10 Module
 MODULES = [
-    "param_discovery",   # Parameter Discovery
-    "open_redirect",     # Open Redirect
-    "sqli",              # SQL Injection
-    "lfi",               # Local File Inclusion
-    "race_condition",    # Race Condition
-    "ssrf",              # Server-Side Request Forgery
-    "xss",               # Cross-Site Scripting
-    "csrf",              # CSRF
-    "cors",              # CORS
-    "dir_traversal"      # Directory Traversal
+    "param_discovery",
+    "open_redirect",
+    "sqli",
+    "lfi",
+    "race_condition",
+    "ssrf",
+    "xss",
+    "csrf",
+    "cors",
+    "dir_traversal"
 ]
 
-# Target Gojek (scope critical & high)
+# Target Harman (scope critical & high)
 TARGETS = [
-    "https://api.gojek.co.id",
-    "https://gofood.co.id",
-    "https://api.gobiz.co.id",
-    "https://portal.gofoodmerchant.co.id",
-    "https://www.gojek.com"
+    "https://www.jbl.com",
+    "https://www.bowerswilkins.com",
+    "https://www.denon.com",
+    "https://www.harmanaudio.com",
+    "https://www.harmankardon.com"
 ]
 
-def add_user_agent_to_config():
-    """Tambahkan header ke config.yaml"""
+def add_headers_to_config():
+    """Tambahkan user-agent dan cookie ke config.yaml"""
     config_path = "config.yaml"
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            config = f.read()
-        if USER_AGENT_HEADER not in config:
-            with open(config_path, 'a') as f:
-                f.write(f"\ncustom_header: '{USER_AGENT_HEADER}'\n")
-            print(f"[✓] Header '{USER_AGENT_HEADER}' ditambahkan ke config.yaml")
-        else:
-            print(f"[✓] Header sudah ada")
-    else:
-        print("[!] config.yaml tidak ditemukan, buat manual nanti")
+    
+    # Konten config yang akan ditulis
+    config_content = f"""
+# DRYBT Configuration for Harman Bug Bounty
+user_agent: "{USER_AGENT}"
+headers:
+  Cookie: "{COOKIE_STRING}"
+  User-Agent: "{USER_AGENT}"
+rate_limit: 5
+timeout: 30
+"""
+    
+    with open(config_path, 'w') as f:
+        f.write(config_content)
+    print(f"[✓] Config ditulis ke {config_path}")
+    print(f"    User-Agent: {USER_AGENT}")
+    print(f"    Cookie: {COOKIE_STRING[:50]}...")
 
 def scan_target(target, module):
     """Jalankan scan satu module ke satu target"""
@@ -64,7 +82,8 @@ def scan_target(target, module):
     
     # Environment untuk header custom
     env = os.environ.copy()
-    env["HTTP_X_YESWEHACK_RESEARCH"] = YWH_USERNAME
+    env["HTTP_USER_AGENT"] = USER_AGENT
+    env["HTTP_COOKIE"] = COOKIE_STRING
     
     print(f"\n[→] Target : {target}")
     print(f"    Module : {module}")
@@ -84,7 +103,7 @@ def scan_target(target, module):
         print(f"    ✓ Selesai dalam {duration:.2f} detik ({duration/60:.2f} menit)")
         
         # Simpan hasil
-        report_dir = "reports/gojek"
+        report_dir = "reports/harman"
         os.makedirs(report_dir, exist_ok=True)
         
         target_safe = target.replace('https://', '').replace('/', '_').replace('.', '_')
@@ -94,8 +113,8 @@ def scan_target(target, module):
         with open(report_file, 'w') as f:
             f.write(f"Target: {target}\n")
             f.write(f"Module: {module}\n")
-            f.write(f"Username: {YWH_USERNAME}\n")
-            f.write(f"Header: {USER_AGENT_HEADER}\n")
+            f.write(f"User-Agent: {USER_AGENT}\n")
+            f.write(f"Cookie: {COOKIE_STRING}\n")
             f.write(f"Timeout: {TIMEOUT} detik\n")
             f.write(f"Duration: {duration:.2f} detik\n")
             f.write(f"Timestamp: {datetime.now()}\n")
@@ -110,17 +129,14 @@ def scan_target(target, module):
         
         print(f"    📁 Laporan: {report_file}")
         
-        # Rate limiting
         time.sleep(RATE_DELAY)
         return True
         
     except subprocess.TimeoutExpired:
-        duration = TIMEOUT
-        print(f"    ⏱️ TIMEOUT setelah {TIMEOUT} detik ({TIMEOUT/60:.0f} menit)")
-        print(f"    (Ini normal untuk module berat seperti SSRF, SQLi, XSS)")
+        print(f"    ⏱️ TIMEOUT setelah {TIMEOUT} detik")
         
-        # Tetap simpan partial output jika ada
-        report_dir = "reports/gojek"
+        # Tetap simpan laporan timeout
+        report_dir = "reports/harman"
         os.makedirs(report_dir, exist_ok=True)
         target_safe = target.replace('https://', '').replace('/', '_').replace('.', '_')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -129,8 +145,9 @@ def scan_target(target, module):
         with open(report_file, 'w') as f:
             f.write(f"Target: {target}\n")
             f.write(f"Module: {module}\n")
-            f.write(f"Status: TIMEOUT setelah {TIMEOUT} detik\n")
-            f.write(f"Username: {YWH_USERNAME}\n")
+            f.write(f"Status: TIMEOUT\n")
+            f.write(f"User-Agent: {USER_AGENT}\n")
+            f.write(f"Cookie: {COOKIE_STRING}\n")
             f.write(f"Timestamp: {datetime.now()}\n")
         
         print(f"    📁 Laporan timeout: {report_file}")
@@ -143,15 +160,13 @@ def scan_target(target, module):
 def main():
     print("""
 ╔══════════════════════════════════════════════════════════════════════╗
-║                    GOJEK BUG BOUNTY HUNTER                           ║
+║              HARMAN INTERNATIONAL BUG BOUNTY HUNTER                  ║
 ║                        by Colin for Khan                             ║
 ║                                                                      ║
-║  Username  : Dryex                                                   ║
-║  Header    : X-YesWeHack-Research: Dryex                            ║
-║  Module    : 10 module (param, open_redirect, sqli, lfi, race,       ║
-║              ssrf, xss, csrf, cors, dir_traversal)                   ║
-║  Timeout   : 1800 detik (30 menit) per module                        ║
-║  Rate Limit: 5 request/detik                                         ║
+║  User-Agent : BugBounty-Harman                                       ║
+║  Cookie     : session + uuid + MIUD (dari login)                     ║
+║  Module     : 10 module                                              ║
+║  Timeout    : 1800 detik (30 menit) per module                       ║
 ╚══════════════════════════════════════════════════════════════════════╝
     """)
     
@@ -161,42 +176,37 @@ def main():
         print("    Pastikan script ini dijalankan dari folder DRYBT")
         sys.exit(1)
     
-    # Tambahkan header ke config
-    add_user_agent_to_config()
+    # Tambahkan konfigurasi
+    add_headers_to_config()
     
     # Info scan
     print(f"\n{'='*60}")
-    print(f"[*] Username YesWeHack : {YWH_USERNAME}")
-    print(f"[*] Total target        : {len(TARGETS)}")
-    print(f"[*] Total module        : {len(MODULES)}")
-    print(f"[*] Total scan          : {len(TARGETS) * len(MODULES)}")
-    print(f"[*] Timeout per module  : {TIMEOUT} detik ({TIMEOUT/60:.0f} menit)")
+    print(f"[*] User-Agent    : {USER_AGENT}")
+    print(f"[*] Cookie loaded : Yes ({len(COOKIE_STRING)} karakter)")
+    print(f"[*] Total target  : {len(TARGETS)}")
+    print(f"[*] Total module  : {len(MODULES)}")
+    print(f"[*] Total scan    : {len(TARGETS) * len(MODULES)}")
     print(f"{'='*60}")
     
-    print("\n[!] PERINGATAN:")
-    print("    - Pastikan kamu sudah registrasi di program Gojek YesWeHack")
-    print("    - Pastikan kamu punya akun Gojek aktif (nomor HP Indonesia/Singapura/Vietnam/Thailand)")
-    print("    - Jangan melakukan fake booking berlebihan")
-    print("    - Scan ini akan berlangsung lama (bisa 5-10 jam)")
-    print("\n[?] Tekan Enter untuk memulai, atau Ctrl+C untuk batal...")
+    print("\n[!] PASTIKAN:")
+    print("    1. Cookie session sudah diisi dengan benar")
+    print("    2. Akun test sudah login dan session masih aktif")
+    print("    3. Kamu sudah registrasi di program Harman YesWeHack")
+    print("\n[?] Tekan Enter untuk memulai scan, atau Ctrl+C batal...")
     input()
     
     print("\n[*] Memulai scanning...\n")
     
-    hasil = {}
     total_success = 0
     total_timeout = 0
-    total_error = 0
     
     for target in TARGETS:
         for module in MODULES:
             success = scan_target(target, module)
             if success:
                 total_success += 1
-                hasil[f"{target}_{module}"] = "success"
             else:
                 total_timeout += 1
-                hasil[f"{target}_{module}"] = "timeout_or_error"
     
     # Ringkasan akhir
     print("\n" + "="*60)
@@ -204,21 +214,8 @@ def main():
     print(f"    Sukses : {total_success}")
     print(f"    Timeout: {total_timeout}")
     print(f"    Total  : {len(TARGETS) * len(MODULES)}")
-    print(f"    Laporan di folder: reports/gojek/")
+    print(f"    Laporan di folder: reports/harman/")
     print("="*60)
-    
-    # Simpan ringkasan
-    summary_file = f"reports/gojek/summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(summary_file, 'w') as f:
-        json.dump({
-            "username": YWH_USERNAME,
-            "targets": TARGETS,
-            "modules": MODULES,
-            "timeout": TIMEOUT,
-            "results": hasil,
-            "timestamp": datetime.now().isoformat()
-        }, f, indent=2)
-    print(f"\n📋 Ringkasan: {summary_file}")
 
 if __name__ == "__main__":
     main()
