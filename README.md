@@ -37,7 +37,7 @@ Beyond Industry Standard | Zero False Positive | Maximum Speed
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/dryex/drybt.git
+git clone https://github.com/Dryex-yo/Drybt.git
 cd drybt
 ```
 
