@@ -208,7 +208,7 @@ Pull requests dan issues sangat diterima untuk pengembangan lebih lanjut.
 
 ## 📧 Contact
 
-- **GitHub**: [@dryex](https://github.com/dryex)
-- **Project Link**: [https://github.com/dryex/drybt](https://github.com/dryex/drybt)
+- **GitHub**: [@dryex](https://github.com/Dryex-yo)
+- **Project Link**: [https://github.com/Dryex-yo/Drybt.git](https://github.com/Dryex-yo/Drybt.git)
 
 <p align="center"> Made with ❤️ by Dryex </p>
