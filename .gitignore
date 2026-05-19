@@ -1,0 +1,85 @@
+cd D:/ubbt
+cat > .gitignore << 'EOF'
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Reports (hasil scan)
+reports/
+*.json
+!requirements.json
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+desktop.ini
+ehthumbs.db
+Icon?
+
+# Config dengan credentials
+config.yaml
+.env
+.secrets
+*.key
+*.pem
+
+# Testing
+test_server.py
+test_*.py
+mock_*.py
+
+# Distribution
+*.zip
+*.tar.gz
+*.7z
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Coverage
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+
+# Pytest
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Upload
+uploads/
+
+# Downloads
+downloads/
+
+# Node modules (if any)
+node_modules/
+
+# Package files
+*.egg-info/
+dist/
+build/
+EOF
