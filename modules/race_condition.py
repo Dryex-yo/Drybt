@@ -3,6 +3,8 @@
 Module 2: Race Condition Detector
 Multi-layer race condition detection dengan precision timing
 Zero false positive dengan 5 detection methods
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -18,10 +20,11 @@ from core.logger import Logger
 logger = Logger()
 
 class RaceCondition:
-    def __init__(self, target: str, threads: int = 50, requests_per_test: int = 15):
+    def __init__(self, target: str, threads: int = 50, requests_per_test: int = 15, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.requests_per_test = requests_per_test
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'total_tests': 0,
@@ -130,11 +133,39 @@ class RaceCondition:
             'concurrent', 'transaction', 'rollback'
         ]
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=5, retries=1)
+    
     async def get_baseline_behavior(self, endpoint: str, method: str) -> Dict:
         """Get baseline response untuk endpoint normal (1 request)"""
-        async with HTTPClient(self.target, timeout=5, retries=1) as client:
-            payload = self._generate_payload(endpoint)
-            
+        client = await self._get_client()
+        payload = self._generate_payload(endpoint)
+        
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                if method == "POST":
+                    resp = await ctx_client.post(endpoint, json=payload)
+                elif method == "PUT":
+                    resp = await ctx_client.put(endpoint, json=payload)
+                elif method == "DELETE":
+                    resp = await ctx_client.delete(endpoint)
+                else:
+                    resp = await ctx_client.get(endpoint)
+                
+                if resp:
+                    body = await resp.text()
+                    return {
+                        "status": resp.status,
+                        "body_hash": hashlib.md5(body.encode()).hexdigest(),
+                        "body_length": len(body),
+                        "success": resp.status == 200,
+                        "response_time_ms": 0
+                    }
+        else:
             if method == "POST":
                 resp = await client.post(endpoint, json=payload)
             elif method == "PUT":
@@ -153,7 +184,8 @@ class RaceCondition:
                     "success": resp.status == 200,
                     "response_time_ms": 0
                 }
-            return {"success": False, "status": 500}
+        
+        return {"success": False, "status": 500}
     
     def _generate_payload(self, endpoint: str) -> Dict:
         """Generate realistic payload untuk testing"""
@@ -205,14 +237,39 @@ class RaceCondition:
         """Send parallel requests untuk race condition test"""
         results = []
         semaphore = asyncio.Semaphore(self.threads)
+        client = await self._get_client()
         
         async def send_one(request_id: int):
             async with semaphore:
-                async with HTTPClient(self.target, timeout=3, retries=1) as client:
-                    payload = self._generate_payload(endpoint)
-                    
-                    start_time = time.time()
-                    
+                payload = self._generate_payload(endpoint)
+                start_time = time.time()
+                
+                # Need to create fresh client for parallel requests or reuse properly
+                if not hasattr(client, 'session') or client.session is None:
+                    async with HTTPClient(self.target, timeout=3, retries=1) as temp_client:
+                        if method == "POST":
+                            resp = await temp_client.post(endpoint, json=payload)
+                        elif method == "PUT":
+                            resp = await temp_client.put(endpoint, json=payload)
+                        elif method == "DELETE":
+                            resp = await temp_client.delete(endpoint)
+                        else:
+                            resp = await temp_client.get(endpoint)
+                        
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        
+                        if resp:
+                            body = await resp.text()
+                            return {
+                                "id": request_id,
+                                "status": resp.status,
+                                "body_hash": hashlib.md5(body.encode()).hexdigest(),
+                                "body_length": len(body),
+                                "body_preview": body[:200],
+                                "success": resp.status == 200,
+                                "response_time_ms": elapsed_ms
+                            }
+                else:
                     if method == "POST":
                         resp = await client.post(endpoint, json=payload)
                     elif method == "PUT":
@@ -235,25 +292,26 @@ class RaceCondition:
                             "success": resp.status == 200,
                             "response_time_ms": elapsed_ms
                         }
-                    return {
-                        "id": request_id,
-                        "status": 500,
-                        "success": False,
-                        "response_time_ms": elapsed_ms
-                    }
+                
+                return {
+                    "id": request_id,
+                    "status": 500,
+                    "success": False,
+                    "response_time_ms": (time.time() - start_time) * 1000
+                }
         
         # Send all requests with microsecond precision
         start_batch = time.perf_counter()
         tasks = [send_one(i) for i in range(count)]
-        results = await asyncio.gather(*tasks)
+        results_list = await asyncio.gather(*tasks)
         batch_time_ms = (time.perf_counter() - start_batch) * 1000
         
         return {
-            "requests": results,
+            "requests": results_list,
             "batch_time_ms": batch_time_ms,
-            "success_count": sum(1 for r in results if r.get("success", False)),
-            "unique_statuses": len(set(r.get("status", 0) for r in results)),
-            "unique_hashes": len(set(r.get("body_hash", "") for r in results if r.get("body_hash")))
+            "success_count": sum(1 for r in results_list if r.get("success", False)),
+            "unique_statuses": len(set(r.get("status", 0) for r in results_list)),
+            "unique_hashes": len(set(r.get("body_hash", "") for r in results_list if r.get("body_hash")))
         }
     
     def analyze_race_condition(self, endpoint: str, method: str, results: Dict, baseline: Dict) -> Optional[Dict]:
@@ -266,13 +324,10 @@ class RaceCondition:
         batch_time_ms = results.get("batch_time_ms", 0)
         
         # ============ LAYER 1: Multi-Success Detection ============
-        # Normal operation seharusnya hanya 1 request yang sukses (untuk state-changing ops)
         if success_count > 1 and len(requests) > 2:
-            # Hitung success rate
             success_rate = (success_count / len(requests)) * 100
             
-            # Cek jika terlalu banyak success (indikasi race condition)
-            if success_rate > 30:  # >30% requests sukses
+            if success_rate > 30:
                 self.stats['vulnerabilities_found'] += 1
                 return {
                     "vulnerable": True,
@@ -284,11 +339,10 @@ class RaceCondition:
                 }
         
         # ============ LAYER 2: Hash Variation Detection ============
-        # Jika response berbeda-beda, ada kemungkinan race condition
         if unique_hashes > 1 and len(requests) > 2:
             hash_variation = (unique_hashes / len(requests)) * 100
             
-            if hash_variation > 20:  # >20% response berbeda
+            if hash_variation > 20:
                 self.stats['vulnerabilities_found'] += 1
                 return {
                     "vulnerable": True,
@@ -301,7 +355,6 @@ class RaceCondition:
         
         # ============ LAYER 3: Status Code Inconsistency ============
         if unique_statuses > 1:
-            # Cek apakah ada campuran 200 dan 409/429
             statuses = [r.get("status", 0) for r in requests]
             has_200 = 200 in statuses
             has_conflict = any(s in [409, 429, 400] for s in statuses)
@@ -317,13 +370,12 @@ class RaceCondition:
                 }
         
         # ============ LAYER 4: Timing Anomaly Detection ============
-        # Race condition sering menyebabkan response time anomaly
         response_times = [r.get("response_time_ms", 0) for r in requests if r.get("response_time_ms", 0) > 0]
         if response_times:
             avg_time = sum(response_times) / len(response_times)
             max_time = max(response_times)
             
-            if max_time > avg_time * 3:  # 3x slower than average
+            if max_time > avg_time * 3:
                 self.stats['vulnerabilities_found'] += 1
                 return {
                     "vulnerable": True,
@@ -335,7 +387,6 @@ class RaceCondition:
                 }
         
         # ============ LAYER 5: Content Analysis ============
-        # Cek response body untuk indikator race condition
         all_bodies = " ".join([r.get("body_preview", "") for r in requests[:5]])
         all_bodies_lower = all_bodies.lower()
         
@@ -355,22 +406,18 @@ class RaceCondition:
     async def test_endpoint(self, endpoint: str, method: str, priority: str) -> Optional[Dict]:
         """Test single endpoint untuk race condition"""
         
-        # Get baseline (1 request)
         baseline = await self.get_baseline_behavior(endpoint, method)
         
         if not baseline.get("success"):
             return None
         
-        # Send parallel requests
         results = await self.send_parallel_requests(endpoint, method, self.requests_per_test)
         
-        # Analyze for race condition
         analysis = self.analyze_race_condition(endpoint, method, results, baseline)
         
         if analysis.get("vulnerable"):
             confidence = analysis.get("confidence", 0)
             
-            # Visual indicator based on confidence
             if confidence >= 90:
                 icon = "💎"
             elif confidence >= 80:
@@ -380,10 +427,7 @@ class RaceCondition:
             else:
                 icon = "🟡"
             
-            logger.finding(
-                f"{icon} Race Condition on {endpoint} [{method}]",
-                f"Detection: {analysis.get('layer')} | Confidence: {confidence}% | {analysis.get('details', '')}"
-            )
+            logger.info(f"{icon} Race Condition on {endpoint} [{method}] | {analysis.get('layer')} | {confidence}%")
             
             return {
                 "type": "race_condition",
@@ -411,7 +455,6 @@ class RaceCondition:
         
         total_endpoints = len(endpoints)
         
-        # Hitung priority distribution
         nuclear_count = len([e for e in endpoints if e in self.nuclear_endpoints])
         critical_count = len([e for e in endpoints if e in self.critical_endpoints])
         high_count = len([e for e in endpoints if e in self.high_endpoints])
@@ -429,7 +472,7 @@ class RaceCondition:
         
         start_time = time.time()
         
-        # Test NUCLEAR first (synchronous for priority)
+        # Test NUCLEAR first
         for endpoint, method in self.nuclear_endpoints:
             if endpoint not in [e[0] for e in endpoints]:
                 continue
@@ -470,12 +513,10 @@ class RaceCondition:
         
         elapsed = time.time() - start_time
         
-        # Calculate statistics
         nuclear_findings = [f for f in self.findings if f.get("priority") == "NUCLEAR"]
         critical_findings = [f for f in self.findings if f.get("priority") == "CRITICAL"]
         high_findings = [f for f in self.findings if f.get("priority") == "HIGH"]
         
-        # Print ULTIMATE SUMMARY
         print(f"\n{'='*60}")
         print(f"📊 RACE CONDITION SCAN SUMMARY")
         print(f"{'='*60}")
@@ -503,7 +544,6 @@ class RaceCondition:
         
         print(f"\n{'='*60}")
         
-        # Performance rating
         if len(self.findings) > 5:
             rating = "🏆 LEGENDARY - Multiple race conditions found!"
         elif len(self.findings) > 2:
@@ -529,16 +569,20 @@ class RaceCondition:
             "high_findings": len(high_findings),
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, threads: int = 50, custom_endpoints: List[Tuple[str, str]] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run race condition detector - DRYBT RACE CONDITION DETECTOR
     
-    @staticmethod
-    async def run(target: str, threads: int = 50, custom_endpoints: List[Tuple[str, str]] = None) -> Dict:
-        """
-        Run race condition detector - DRYBT RACE CONDITION DETECTOR
-        
-        Args:
-            target: Target URL
-            threads: Concurrent threads (default 50)
-            custom_endpoints: List of (endpoint, method) tuples
-        """
-        scanner = RaceCondition(target, threads=threads, requests_per_test=15)
-        return await scanner.scan(custom_endpoints)
+    Args:
+        target: Target URL
+        threads: Concurrent threads (default 50)
+        custom_endpoints: List of (endpoint, method) tuples
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = RaceCondition(target, threads=threads, requests_per_test=15, client=client)
+    return await scanner.scan(custom_endpoints)

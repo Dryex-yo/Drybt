@@ -3,6 +3,8 @@
 Module 11: CORS Scanner
 6 Layer CORS misconfiguration detection dengan zero false positive
 Mendeteksi: Wildcard origin, Null origin, Credentials leakage, Reflected origin
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -13,9 +15,10 @@ from core.logger import Logger
 logger = Logger()
 
 class CORSScanner:
-    def __init__(self, target: str, threads: int = 40):
+    def __init__(self, target: str, threads: int = 40, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'endpoints_tested': 0,
@@ -25,48 +28,27 @@ class CORSScanner:
         
         # ============ TEST ORIGINS ============
         self.test_origins = [
-            # Basic test origins
             'https://evil.com',
             'http://evil.com',
             'https://attacker.com',
             'http://attacker.com',
             'https://evil.attacker.com',
             'http://evil.attacker.com',
-            
-            # Null origin
             'null',
-            
-            # Subdomain tests
             f'https://evil.{self.target.replace("https://", "").replace("http://", "")}',
             f'http://evil.{self.target.replace("https://", "").replace("http://", "")}',
-            
-            # Same-origin variations
             self.target,
             self.target.replace('https://', 'http://'),
-            
-            # Wildcard
             '*',
-            
-            # With path
             f'{self.target}/evil',
-            
-            # With port
             f'{self.target}:8080',
-            
-            # IP-based
             'https://127.0.0.1',
             'http://127.0.0.1',
             'https://0.0.0.0',
-            
-            # Unicode domain
-            'https://еvil.com',  # Cyrillic e
-            'https://evil。com',  # Japanese dot
-            
-            # Multiple origins
+            'https://еvil.com',
+            'https://evil。com',
             'https://evil.com https://attacker.com',
             'https://evil.com,https://attacker.com',
-            
-            # With protocols
             'file:///etc/passwd',
             'data:text/html,<script>alert(1)</script>',
             'javascript:alert(1)',
@@ -92,18 +74,125 @@ class CORSScanner:
             'access-control-max-age'
         ]
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=5, retries=1)
+    
     async def test_cors(self, endpoint: str, origin: str) -> Optional[Dict]:
         """Test CORS configuration with specific origin"""
+        client = await self._get_client()
+        headers = {"Origin": origin}
         
-        async with HTTPClient(self.target, timeout=5, retries=1) as client:
-            headers = {"Origin": origin}
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(endpoint, headers=headers)
+                if response:
+                    acao = response.headers.get('access-control-allow-origin', '')
+                    acac = response.headers.get('access-control-allow-credentials', '')
+                    
+                    # Layer 1: Wildcard with credentials
+                    if acao == '*' and acac == 'true':
+                        self.stats['vulnerabilities_found'] += 1
+                        return {
+                            "vulnerable": True,
+                            "type": "WILDCARD_WITH_CREDENTIALS",
+                            "severity": "critical",
+                            "confidence": 100,
+                            "endpoint": endpoint,
+                            "origin_sent": origin,
+                            "acao": acao,
+                            "acac": acac,
+                            "details": "ACAO: * with ACAC: true - Credentials can be stolen by any origin"
+                        }
+                    
+                    # Layer 2: Null origin
+                    if acao == 'null' and origin == 'null':
+                        self.stats['vulnerabilities_found'] += 1
+                        return {
+                            "vulnerable": True,
+                            "type": "NULL_ORIGIN_ACCEPTED",
+                            "severity": "high",
+                            "confidence": 95,
+                            "endpoint": endpoint,
+                            "origin_sent": origin,
+                            "acao": acao,
+                            "acac": acac,
+                            "details": "Null origin accepted - Can be exploited from sandboxed iframes"
+                        }
+                    
+                    # Layer 3: Reflected origin
+                    if acao == origin and origin not in [self.target, self.target.replace('https://', 'http://')]:
+                        severity = "critical" if acac == 'true' else "high"
+                        self.stats['vulnerabilities_found'] += 1
+                        return {
+                            "vulnerable": True,
+                            "type": "REFLECTED_ORIGIN",
+                            "severity": severity,
+                            "confidence": 100,
+                            "endpoint": endpoint,
+                            "origin_sent": origin,
+                            "acao": acao,
+                            "acac": acac,
+                            "details": f"Reflected origin: {acao}"
+                        }
+                    
+                    # Layer 4: Wildcard origin
+                    if acao == '*':
+                        self.stats['vulnerabilities_found'] += 1
+                        return {
+                            "vulnerable": True,
+                            "type": "WILDCARD_ORIGIN",
+                            "severity": "medium",
+                            "confidence": 80,
+                            "endpoint": endpoint,
+                            "origin_sent": origin,
+                            "acao": acao,
+                            "acac": acac,
+                            "details": "Wildcard origin allowed (without credentials)"
+                        }
+                    
+                    # Layer 5: Subdomain wildcard
+                    domain = self.target.replace("https://", "").replace("http://", "")
+                    if acao and acao.endswith(f'.{domain}'):
+                        self.stats['vulnerabilities_found'] += 1
+                        return {
+                            "vulnerable": True,
+                            "type": "SUBDOMAIN_WILDCARD",
+                            "severity": "medium",
+                            "confidence": 85,
+                            "endpoint": endpoint,
+                            "origin_sent": origin,
+                            "acao": acao,
+                            "acac": acac,
+                            "details": f"Subdomain wildcard accepted: {acao}"
+                        }
+                    
+                    # Layer 6: Overly permissive methods
+                    acam = response.headers.get('access-control-allow-methods', '')
+                    if 'GET' in acam and 'POST' in acam and 'PUT' in acam and 'DELETE' in acam:
+                        if acao == origin:
+                            self.stats['vulnerabilities_found'] += 1
+                            return {
+                                "vulnerable": True,
+                                "type": "OVERLY_PERMISSIVE_METHODS",
+                                "severity": "low",
+                                "confidence": 70,
+                                "endpoint": endpoint,
+                                "origin_sent": origin,
+                                "acao": acao,
+                                "acam": acam,
+                                "details": f"Overly permissive methods: {acam}"
+                            }
+        else:
             response = await client.get(endpoint, headers=headers)
-            
             if response:
                 acao = response.headers.get('access-control-allow-origin', '')
                 acac = response.headers.get('access-control-allow-credentials', '')
                 
-                # Layer 1: Check for wildcard origin with credentials
+                # Layer 1: Wildcard with credentials
                 if acao == '*' and acac == 'true':
                     self.stats['vulnerabilities_found'] += 1
                     return {
@@ -118,7 +207,7 @@ class CORSScanner:
                         "details": "ACAO: * with ACAC: true - Credentials can be stolen by any origin"
                     }
                 
-                # Layer 2: Check for null origin (bypass)
+                # Layer 2: Null origin
                 if acao == 'null' and origin == 'null':
                     self.stats['vulnerabilities_found'] += 1
                     return {
@@ -133,15 +222,9 @@ class CORSScanner:
                         "details": "Null origin accepted - Can be exploited from sandboxed iframes"
                     }
                 
-                # Layer 3: Check for reflected origin (critical)
+                # Layer 3: Reflected origin
                 if acao == origin and origin not in [self.target, self.target.replace('https://', 'http://')]:
-                    if acac == 'true':
-                        severity = "critical"
-                        details = "Reflects any origin with credentials allowed"
-                    else:
-                        severity = "high"
-                        details = "Reflects any origin without credentials"
-                    
+                    severity = "critical" if acac == 'true' else "high"
                     self.stats['vulnerabilities_found'] += 1
                     return {
                         "vulnerable": True,
@@ -155,7 +238,7 @@ class CORSScanner:
                         "details": f"Reflected origin: {acao}"
                     }
                 
-                # Layer 4: Check for insecure additional headers
+                # Layer 4: Wildcard origin
                 if acao == '*':
                     self.stats['vulnerabilities_found'] += 1
                     return {
@@ -170,8 +253,9 @@ class CORSScanner:
                         "details": "Wildcard origin allowed (without credentials)"
                     }
                 
-                # Layer 5: Check for subdomain wildcard
-                if acao and acao.endswith(f'.{self.target.replace("https://", "").replace("http://", "")}'):
+                # Layer 5: Subdomain wildcard
+                domain = self.target.replace("https://", "").replace("http://", "")
+                if acao and acao.endswith(f'.{domain}'):
                     self.stats['vulnerabilities_found'] += 1
                     return {
                         "vulnerable": True,
@@ -185,7 +269,7 @@ class CORSScanner:
                         "details": f"Subdomain wildcard accepted: {acao}"
                     }
                 
-                # Layer 6: Check for insecure methods/headers
+                # Layer 6: Overly permissive methods
                 acam = response.headers.get('access-control-allow-methods', '')
                 if 'GET' in acam and 'POST' in acam and 'PUT' in acam and 'DELETE' in acam:
                     if acao == origin:
@@ -201,8 +285,8 @@ class CORSScanner:
                             "acam": acam,
                             "details": f"Overly permissive methods: {acam}"
                         }
-            
-            return None
+        
+        return None
     
     async def scan_endpoint(self, endpoint: str) -> List[Dict]:
         """Scan single endpoint for CORS misconfigurations"""
@@ -217,12 +301,8 @@ class CORSScanner:
                 if result:
                     findings.append(result)
                     icon = "💎" if result.get('severity') == 'critical' else "🔴" if result.get('severity') == 'high' else "🟠"
-                    logger.finding(
-                        f"{icon} CORS Misconfiguration on {endpoint}",
-                        f"Origin: {origin[:60]} | ACAO: {result.get('acao')} | ACAC: {result.get('acac')}"
-                    )
+                    logger.info(f"{icon} CORS on {endpoint}: {origin[:60]} | ACAO: {result.get('acao')}")
         
-        # Test all origins
         tasks = [test_origin(origin) for origin in self.test_origins]
         await asyncio.gather(*tasks)
         
@@ -255,12 +335,10 @@ class CORSScanner:
         
         elapsed = asyncio.get_event_loop().time() - start_time
         
-        # Categorize findings
         critical_findings = [f for f in self.findings if f.get('severity') == 'critical']
         high_findings = [f for f in self.findings if f.get('severity') == 'high']
         medium_findings = [f for f in self.findings if f.get('severity') == 'medium']
         
-        # Print summary
         print(f"\n{'='*60}")
         print(f"📊 CORS SCAN SUMMARY")
         print(f"{'='*60}")
@@ -307,9 +385,19 @@ class CORSScanner:
             "security_rating": rating,
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, custom_endpoints: List[str] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run CORS scanner - DRYBT CORS SCANNER
     
-    @staticmethod
-    async def run(target: str, custom_endpoints: List[str] = None) -> Dict:
-        """Run CORS scanner"""
-        scanner = CORSScanner(target)
-        return await scanner.scan(custom_endpoints)
+    Args:
+        target: Target URL
+        custom_endpoints: Custom endpoints to test (optional)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = CORSScanner(target, client=client)
+    return await scanner.scan(custom_endpoints)

@@ -4,19 +4,8 @@ DRYBT by Dryex v.1 - Ultimate Bug Bounty Tools
 Beyond Industry Standard - Zero False Positive - Maximum Speed
 13 Security Modules Integrated
 
-Module 1: Parameter Discovery - 7 Layer detection
-Module 2: Race Condition - 5 Layer detection
-Module 3: JWT Attack - 7 Layer detection
-Module 4: GraphQL Batching - 7 Layer detection
-Module 5: LLM Injection - 8 Layer detection
-Module 6: SSRF Scanner - 8 Layer detection (Internal IP, Cloud metadata, Port scanning, Protocol smuggling)
-Module 7: SQL Injection - 9 Layer detection (Error, Boolean, Time, Union, Stacked, OOB, Fingerprinting)
-Module 8: XSS Scanner - 9 Layer detection (Reflected, Stored, DOM, Mutated, Blind - Context aware)
-Module 9: LFI/RFI Scanner - 9 Layer detection (LFI, RFI, Null byte, WAF bypass, Log poisoning)
-Module 10: Open Redirect Scanner
-Module 11: CORS Scanner
-Module 12: CSRF Scanner
-Module 13: Directory Traversal Scanner
+MODIFIED: Added X-Bug-Bounty header support for CLEAR bug bounty program
+Username: dryex
 """
 
 import asyncio
@@ -50,6 +39,8 @@ BANNER = f"""
 ║     6. SSRF Scanner         13. Directory Traversal                            ║
 ║     7. SQL Injection                                                           ║
 ║                                                                                ║
+║  [CLEAR Mode] X-Bug-Bounty: HackerOne-dryex                                    ║
+║                                                                                ║
 ╚════════════════════════════════════════════════════════════════════════════════╝
 {Style.RESET_ALL}
 """
@@ -58,6 +49,7 @@ BANNER = f"""
 from core.logger import Logger
 from core.output import ReportGenerator
 from core.target_detector import TargetDetector
+from core.http_client import HTTPClient
 
 # Module 1-5 imports
 from modules.param_discovery import ParameterDiscovery
@@ -88,13 +80,18 @@ class DRYBT:
         self.results = []
         self.report_gen = ReportGenerator(target)
     
+    async def _get_client(self):
+        """Get HTTP client with CLEAR headers"""
+        return HTTPClient(self.target, hackerone_username="dryex")
+    
     # ================================================================
     # MODULE 1: Parameter Discovery
     # ================================================================
     async def run_param_discovery(self) -> dict:
         """Module 1: Parameter Discovery - 7 Layer detection"""
         logger.info("Running Module 1: Parameter Discovery")
-        return await ParameterDiscovery.run(self.target, threads=50, use_ai=False)
+        async with await self._get_client() as client:
+            return await ParameterDiscovery.run(self.target, client=client)
     
     # ================================================================
     # MODULE 2: Race Condition
@@ -102,7 +99,8 @@ class DRYBT:
     async def run_race_condition(self) -> dict:
         """Module 2: Race Condition Tester - 5 Layer detection"""
         logger.info("Running Module 2: Race Condition Tester")
-        return await RaceCondition.run(self.target, threads=50)
+        async with await self._get_client() as client:
+            return await RaceCondition.run(self.target, client=client)
     
     # ================================================================
     # MODULE 3: JWT Attack
@@ -113,7 +111,8 @@ class DRYBT:
         if not self.jwt_token:
             logger.warning("No JWT token provided! Use --token parameter")
             return {"module": "jwt_attack", "status": "missing_token", "findings": []}
-        return await JWTAttack.run(self.target, self.jwt_token)
+        async with await self._get_client() as client:
+            return await JWTAttack.run(self.target, self.jwt_token, client=client)
     
     # ================================================================
     # MODULE 4: GraphQL Batching
@@ -121,7 +120,8 @@ class DRYBT:
     async def run_graphql_batch(self) -> dict:
         """Module 4: GraphQL Batching Attack - 7 Layer detection"""
         logger.info("Running Module 4: GraphQL Batching Attack")
-        return await GraphQLBatch.run(self.target)
+        async with await self._get_client() as client:
+            return await GraphQLBatch.run(self.target, client=client)
     
     # ================================================================
     # MODULE 5: LLM Injection
@@ -129,15 +129,17 @@ class DRYBT:
     async def run_llm_injection(self) -> dict:
         """Module 5: LLM Injection Scanner - 8 Layer detection"""
         logger.info("Running Module 5: LLM Injection Scanner")
-        return await LLMInjection.run(self.target)
+        async with await self._get_client() as client:
+            return await LLMInjection.run(self.target, client=client)
     
     # ================================================================
-    # MODULE 6: SSRF Scanner (Internal IP, Cloud metadata, Port scanning)
+    # MODULE 6: SSRF Scanner
     # ================================================================
     async def run_ssrf(self) -> dict:
         """Module 6: SSRF Scanner - 8 Layer detection"""
         logger.info("Running Module 6: SSRF Scanner")
-        return await SSRFScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await SSRFScanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE 7: SQL Injection Scanner
@@ -145,23 +147,26 @@ class DRYBT:
     async def run_sqli(self) -> dict:
         """Module 7: SQL Injection Scanner - 9 Layer detection"""
         logger.info("Running Module 7: SQL Injection Scanner")
-        return await SQLiScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await SQLiScanner.run(self.target, client=client)
     
     # ================================================================
-    # MODULE 8: XSS Scanner (Context-aware: HTML, Attribute, JS, CSS, URL)
+    # MODULE 8: XSS Scanner
     # ================================================================
     async def run_xss(self) -> dict:
         """Module 8: XSS Scanner - 9 Layer detection, Context-aware"""
         logger.info("Running Module 8: XSS Scanner")
-        return await XSSScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await XSSScanner.run(self.target, client=client)
     
     # ================================================================
-    # MODULE 9: LFI/RFI Scanner (Local/Remote File Inclusion)
+    # MODULE 9: LFI/RFI Scanner
     # ================================================================
     async def run_lfi_rfi(self) -> dict:
         """Module 9: LFI/RFI Scanner - 9 Layer detection"""
         logger.info("Running Module 9: LFI/RFI Scanner")
-        return await LFI_RFI_Scanner.run(self.target)
+        async with await self._get_client() as client:
+            return await LFI_RFI_Scanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE 10: Open Redirect Scanner
@@ -169,7 +174,8 @@ class DRYBT:
     async def run_open_redirect(self) -> dict:
         """Module 10: Open Redirect Scanner"""
         logger.info("Running Module 10: Open Redirect Scanner")
-        return await OpenRedirectScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await OpenRedirectScanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE 11: CORS Scanner
@@ -177,7 +183,8 @@ class DRYBT:
     async def run_cors(self) -> dict:
         """Module 11: CORS Misconfiguration Scanner"""
         logger.info("Running Module 11: CORS Scanner")
-        return await CORSScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await CORSScanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE 12: CSRF Scanner
@@ -185,7 +192,8 @@ class DRYBT:
     async def run_csrf(self) -> dict:
         """Module 12: CSRF Scanner"""
         logger.info("Running Module 12: CSRF Scanner")
-        return await CSRFScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await CSRFScanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE 13: Directory Traversal Scanner
@@ -193,7 +201,8 @@ class DRYBT:
     async def run_dir_traversal(self) -> dict:
         """Module 13: Directory Traversal Scanner"""
         logger.info("Running Module 13: Directory Traversal Scanner")
-        return await DirTraversalScanner.run(self.target)
+        async with await self._get_client() as client:
+            return await DirTraversalScanner.run(self.target, client=client)
     
     # ================================================================
     # MODULE DISPATCHER
@@ -201,18 +210,15 @@ class DRYBT:
     async def run_module(self, module_name: str) -> dict:
         """Run a single module by name"""
         modules = {
-            # Core modules (1-5)
             "param_discovery": self.run_param_discovery,
             "race_condition": self.run_race_condition,
             "jwt": self.run_jwt_attack,
             "graphql": self.run_graphql_batch,
             "llm": self.run_llm_injection,
-            # Advanced modules (6-9)
             "ssrf": self.run_ssrf,
             "sqli": self.run_sqli,
             "xss": self.run_xss,
             "lfi": self.run_lfi_rfi,
-            # Additional modules (10-13)
             "open_redirect": self.run_open_redirect,
             "cors": self.run_cors,
             "csrf": self.run_csrf,
@@ -232,18 +238,15 @@ class DRYBT:
         """Run all 13 modules sequentially"""
         logger.info("Running ALL 13 modules...")
         modules = [
-            # Core modules (1-5)
             ("param_discovery", self.run_param_discovery),
             ("race_condition", self.run_race_condition),
             ("jwt", self.run_jwt_attack),
             ("graphql", self.run_graphql_batch),
             ("llm", self.run_llm_injection),
-            # Advanced modules (6-9)
             ("ssrf", self.run_ssrf),
             ("sqli", self.run_sqli),
             ("xss", self.run_xss),
             ("lfi", self.run_lfi_rfi),
-            # Additional modules (10-13)
             ("open_redirect", self.run_open_redirect),
             ("cors", self.run_cors),
             ("csrf", self.run_csrf),
@@ -257,7 +260,7 @@ class DRYBT:
             logger.info(f"{'='*60}")
             result = await func()
             results.append(result)
-            await asyncio.sleep(1)  # Delay between modules
+            await asyncio.sleep(2)  # Delay between modules
         
         return results
     
@@ -301,7 +304,7 @@ async def main():
 ║    python main.py -t https://example.com -m jwt --token "your_jwt_token"       ║
 ║                                                                                ║
 ║  With Target Detection:                                                        ║
-║    python main.py -t https://example.com --detect                              ║
+║    python main.py -t https://www.clearme.com --detect                          ║
 ║                                                                                ║
 ║  Available Modules:                                                            ║
 ║    param_discovery, race_condition, jwt, graphql, llm,                         ║
@@ -321,24 +324,45 @@ async def main():
     
     args = parser.parse_args()
     
-    # Intelligent target detection
-    if args.detect:
-        detector = TargetDetector(args.target)
-        detection_results = await detector.scan()
-        
-        if detection_results["suggested_modules"]:
-            print(f"{Fore.CYAN}Suggested to run: {', '.join(detection_results['suggested_modules'])}{Style.RESET_ALL}\n")
-            
-            response = input("Run suggested modules? (y/N): ")
-            if response.lower() == 'y':
-                args.module = "all"
-    
+    print(f"{Fore.CYAN}[✓] CLEAR Mode Active: X-Bug-Bounty: HackerOne-dryex{Style.RESET_ALL}")
     print(f"{Fore.CYAN}[*] Target: {args.target}")
     print(f"[*] Module: {args.module}")
     print(f"[*] Output: {args.output}{Style.RESET_ALL}")
     if args.token:
         print(f"{Fore.CYAN}[*] JWT Token: {args.token[:50]}...{Style.RESET_ALL}")
     print()
+    
+    # Intelligent target detection (FIXED)
+    if args.detect:
+        print(f"{Fore.YELLOW}[*] Running intelligent target detection...{Style.RESET_ALL}")
+        try:
+            async with HTTPClient(args.target, hackerone_username="dryex") as client:
+                detector = TargetDetector(args.target, client)
+                detection_results = await detector.detect_all()
+                
+                # Print summary
+                print(detector.get_summary())
+                
+                # Show suggested modules based on detection
+                suggested = []
+                if detection_results.get('api_endpoints'):
+                    suggested.append("param_discovery")
+                    if any('/graphql' in str(e) for e in detection_results['api_endpoints']):
+                        suggested.append("graphql")
+                if detection_results.get('parameters'):
+                    suggested.extend(["xss", "sqli", "lfi"])
+                if detection_results.get('forms'):
+                    suggested.append("csrf")
+                
+                suggested = list(set(suggested))[:5]
+                
+                if suggested:
+                    print(f"\n{Fore.CYAN}Suggested modules: {', '.join(suggested)}{Style.RESET_ALL}")
+                    response = input("Run suggested modules? (y/N): ")
+                    if response.lower() == 'y':
+                        args.module = "all"
+        except Exception as e:
+            print(f"{Fore.RED}[!] Detection failed: {e}{Style.RESET_ALL}")
     
     scanner = DRYBT(args.target, args.output, args.token)
     

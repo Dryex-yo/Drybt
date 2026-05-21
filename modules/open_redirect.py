@@ -3,6 +3,8 @@
 Module 10: Open Redirect Scanner
 4 Layer open redirect detection | Waktu: 15-20 menit | Akurasi: 90%
 Mendeteksi: Basic redirect, Bypass techniques, DOM-based redirect, Header injection
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -16,10 +18,11 @@ from core.logger import Logger
 logger = Logger()
 
 class OpenRedirectScanner:
-    def __init__(self, target: str, threads: int = 60, timeout: int = 4):
+    def __init__(self, target: str, threads: int = 60, timeout: int = 4, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.timeout = timeout
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'endpoints_tested': 0,
@@ -27,7 +30,7 @@ class OpenRedirectScanner:
             'vulnerabilities_found': 0
         }
         
-        # ============ PARAMETERS (25 parameter - dikurangi) ============
+        # ============ PARAMETERS ============
         self.redirect_params = [
             'redirect', 'redirect_uri', 'redirect_url', 'return', 'return_to',
             'next', 'continue', 'goto', 'callback', 'callback_url', 'url',
@@ -36,7 +39,7 @@ class OpenRedirectScanner:
             'location', 'redirect_to', 'return_url'
         ]
         
-        # ============ LAYER 1: BASIC PAYLOADS (8 payload) ============
+        # ============ LAYER 1: BASIC PAYLOADS ============
         self.basic_payloads = [
             'https://evil.com',
             'http://evil.com',
@@ -48,7 +51,7 @@ class OpenRedirectScanner:
             'https://evil.com%2F@',
         ]
         
-        # ============ LAYER 2: BYPASS PAYLOADS (10 payload) ============
+        # ============ LAYER 2: BYPASS PAYLOADS ============
         self.bypass_payloads = [
             'https://evil%2Ecom',
             'https:%2F%2Fevil.com',
@@ -62,7 +65,7 @@ class OpenRedirectScanner:
             'https://0x7f000001',
         ]
         
-        # ============ LAYER 3: DOM-BASED PAYLOADS (5 payload) ============
+        # ============ LAYER 3: DOM-BASED PAYLOADS ============
         self.dom_payloads = [
             'javascript:location.href="https://evil.com"',
             'javascript:window.location="https://evil.com"',
@@ -71,7 +74,7 @@ class OpenRedirectScanner:
             'data:text/html,<script>location.href="https://evil.com"</script>',
         ]
         
-        # ============ LAYER 4: HEADER INJECTION (2 payload) ============
+        # ============ LAYER 4: HEADER INJECTION ============
         self.header_payloads = [
             'https://evil.com%0d%0aLocation:https://legitimate.com',
             'https://evil.com%0d%0aHost:legitimate.com',
@@ -80,13 +83,37 @@ class OpenRedirectScanner:
         # Evil patterns
         self.evil_patterns = ['evil.com', '127.0.0.1', '2130706433', '0x7f000001']
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=self.timeout, retries=1)
+    
     async def test_redirect(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Test open redirect"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(url)
+                if response and response.status in [301, 302, 303, 307, 308]:
+                    location = response.headers.get('Location', '')
+                    for evil in self.evil_patterns:
+                        if evil in location:
+                            return {
+                                "vulnerable": True,
+                                "type": "OPEN_REDIRECT",
+                                "severity": "medium",
+                                "confidence": 95,
+                                "endpoint": endpoint,
+                                "parameter": param,
+                                "payload": payload[:80],
+                                "redirect_location": location[:100]
+                            }
+        else:
             response = await client.get(url)
-            
             if response and response.status in [301, 302, 303, 307, 308]:
                 location = response.headers.get('Location', '')
                 for evil in self.evil_patterns:
@@ -101,24 +128,47 @@ class OpenRedirectScanner:
                             "payload": payload[:80],
                             "redirect_location": location[:100]
                         }
-            return None
+        
+        return None
     
     async def test_dom_redirect(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Test DOM-based redirect"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(url)
+                if response and response.status == 200:
+                    body = await response.text()
+                    js_patterns = [
+                        r'location\.href\s*=\s*["\']([^"\']+)',
+                        r'window\.location\s*=\s*["\']([^"\']+)',
+                        r'location\.assign\(["\']([^"\']+)',
+                    ]
+                    for pattern in js_patterns:
+                        matches = re.findall(pattern, body, re.IGNORECASE)
+                        for match in matches:
+                            for evil in self.evil_patterns:
+                                if evil in match:
+                                    return {
+                                        "vulnerable": True,
+                                        "type": "DOM_REDIRECT",
+                                        "severity": "medium",
+                                        "confidence": 80,
+                                        "endpoint": endpoint,
+                                        "parameter": param,
+                                        "payload": payload[:80]
+                                    }
+        else:
             response = await client.get(url)
-            
             if response and response.status == 200:
                 body = await response.text()
-                
                 js_patterns = [
                     r'location\.href\s*=\s*["\']([^"\']+)',
                     r'window\.location\s*=\s*["\']([^"\']+)',
                     r'location\.assign\(["\']([^"\']+)',
                 ]
-                
                 for pattern in js_patterns:
                     matches = re.findall(pattern, body, re.IGNORECASE)
                     for match in matches:
@@ -133,15 +183,31 @@ class OpenRedirectScanner:
                                     "parameter": param,
                                     "payload": payload[:80]
                                 }
-            return None
+        
+        return None
     
     async def test_header_injection(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Test header injection"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={urllib.parse.quote(payload, safe='')}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(url)
+                if response:
+                    location = response.headers.get('Location', '')
+                    if 'evil.com' in location:
+                        return {
+                            "vulnerable": True,
+                            "type": "HEADER_INJECTION",
+                            "severity": "high",
+                            "confidence": 85,
+                            "endpoint": endpoint,
+                            "parameter": param,
+                            "payload": payload[:80]
+                        }
+        else:
             response = await client.get(url)
-            
             if response:
                 location = response.headers.get('Location', '')
                 if 'evil.com' in location:
@@ -154,7 +220,8 @@ class OpenRedirectScanner:
                         "parameter": param,
                         "payload": payload[:80]
                     }
-            return None
+        
+        return None
     
     async def scan_endpoint(self, endpoint: str) -> List[Dict]:
         """Scan single endpoint - optimized"""
@@ -177,11 +244,13 @@ class OpenRedirectScanner:
                     findings.append(result)
                     self.stats['vulnerabilities_found'] += 1
                     icon = "🔴" if result.get('severity') == 'high' else "🟠"
-                    logger.finding(f"{icon} {result['type']} on {endpoint} via {param}", payload[:60])
+                    logger.info(f"{icon} {result['type']} on {endpoint} via {param}: {payload[:60]}")
                     return True
             return False
         
         for param in self.redirect_params:
+            found = False
+            
             # Basic payloads
             for payload in self.basic_payloads:
                 self.stats['payloads_tested'] += 1
@@ -291,9 +360,19 @@ class OpenRedirectScanner:
             "vulnerabilities_found": len(self.findings),
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, custom_endpoints: List[str] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run open redirect scanner - DRYBT OPEN REDIRECT SCANNER
     
-    @staticmethod
-    async def run(target: str, custom_endpoints: List[str] = None) -> Dict:
-        """Run open redirect scanner"""
-        scanner = OpenRedirectScanner(target)
-        return await scanner.scan(custom_endpoints)
+    Args:
+        target: Target URL
+        custom_endpoints: Custom endpoints to test (optional)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = OpenRedirectScanner(target, client=client)
+    return await scanner.scan(custom_endpoints)

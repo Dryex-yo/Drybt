@@ -3,6 +3,8 @@
 Module 7: SQL Injection Scanner
 5 Layer SQL injection detection | Waktu: 12-15 menit | Akurasi: 90%
 Mendeteksi: Error-based, Boolean-based, Time-based, Union-based
+
+MODIFIED: Added external HTTPClient support for X-Bug-Bounty header
 """
 
 import asyncio
@@ -18,10 +20,11 @@ from core.logger import Logger
 logger = Logger()
 
 class SQLiScanner:
-    def __init__(self, target: str, threads: int = 50, timeout: int = 5):
+    def __init__(self, target: str, threads: int = 50, timeout: int = 5, client: HTTPClient = None):
         self.target = target.rstrip('/')
         self.threads = threads
         self.timeout = timeout
+        self.client = client  # External client with X-Bug-Bounty header
         self.findings: List[Dict] = []
         self.stats = {
             'endpoints_tested': 0,
@@ -29,7 +32,7 @@ class SQLiScanner:
             'vulnerabilities_found': 0
         }
         
-        # ============ SQLI PARAMETERS (25 parameter - dikurangi) ============
+        # ============ SQLI PARAMETERS ============
         self.sqli_params = [
             'id', 'user', 'user_id', 'uid', 'account', 'account_id',
             'product', 'product_id', 'item', 'post', 'page', 'page_id',
@@ -38,7 +41,7 @@ class SQLiScanner:
             'sort', 'order', 'limit', 'offset'
         ]
         
-        # ============ ERROR-BASED PAYLOADS (5 payload) ============
+        # ============ ERROR-BASED PAYLOADS ============
         self.error_payloads = [
             "'", "\"", "')", "\")",
             "' OR '1'='1",
@@ -47,21 +50,21 @@ class SQLiScanner:
             "' UNION SELECT NULL--"
         ]
         
-        # ============ BOOLEAN-BASED PAYLOADS (3 pair) ============
+        # ============ BOOLEAN-BASED PAYLOADS ============
         self.boolean_payloads = [
             ("' AND '1'='1", "' AND '1'='2"),
             ("' AND 1=1", "' AND 1=2"),
             ("' OR '1'='1", "' OR '1'='2"),
         ]
         
-        # ============ TIME-BASED PAYLOADS (3 payload) ============
+        # ============ TIME-BASED PAYLOADS ============
         self.time_payloads = [
             "' AND SLEEP(3)--",
             "' OR SLEEP(3)--",
             "1' AND SLEEP(3)#",
         ]
         
-        # ============ UNION-BASED PAYLOADS (3 payload) ============
+        # ============ UNION-BASED PAYLOADS ============
         self.union_payloads = [
             "' UNION SELECT NULL--",
             "' UNION SELECT NULL,NULL--",
@@ -77,13 +80,40 @@ class SQLiScanner:
             'sqlite': ['sqlite', 'sqlite3']
         }
     
+    async def _get_client(self):
+        """Get HTTP client - use external if available, otherwise create new"""
+        if self.client:
+            return self.client
+        else:
+            return HTTPClient(self.target, timeout=self.timeout, retries=1)
+    
     async def test_error_based(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Error-based SQL injection detection"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={quote(payload)}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={quote(payload)}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(url)
+                if response:
+                    response_text = await response.text()
+                    body = response_text.lower() if response_text else ""
+                    
+                    for db_type, signatures in self.db_signatures.items():
+                        for sig in signatures:
+                            if sig in body:
+                                return {
+                                    "vulnerable": True,
+                                    "type": "ERROR_BASED_SQLI",
+                                    "database": db_type,
+                                    "severity": "critical",
+                                    "confidence": 100,
+                                    "endpoint": endpoint,
+                                    "parameter": param,
+                                    "payload": payload[:50]
+                                }
+        else:
             response = await client.get(url)
-            
             if response:
                 response_text = await response.text()
                 body = response_text.lower() if response_text else ""
@@ -105,12 +135,41 @@ class SQLiScanner:
     
     async def test_boolean_based(self, endpoint: str, param: str, true_payload: str, false_payload: str) -> Optional[Dict]:
         """Boolean-based SQL injection detection"""
+        client = await self._get_client()
+        url_true = f"{endpoint}?{param}={quote(true_payload)}"
+        url_false = f"{endpoint}?{param}={quote(false_payload)}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url_true = f"{endpoint}?{param}={quote(true_payload)}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                resp_true = await ctx_client.get(url_true)
+                resp_false = await ctx_client.get(url_false)
+                
+                if resp_true and resp_false:
+                    body_true = await resp_true.text()
+                    body_false = await resp_false.text()
+                    
+                    len_true = len(body_true)
+                    len_false = len(body_false)
+                    len_diff = abs(len_true - len_false)
+                    
+                    if len_diff > 50:
+                        true_hash = hashlib.md5(body_true.encode()).hexdigest()
+                        false_hash = hashlib.md5(body_false.encode()).hexdigest()
+                        
+                        if true_hash != false_hash:
+                            return {
+                                "vulnerable": True,
+                                "type": "BOOLEAN_BASED_SQLI",
+                                "severity": "high",
+                                "confidence": 90,
+                                "endpoint": endpoint,
+                                "parameter": param,
+                                "true_payload": true_payload[:50],
+                                "false_payload": false_payload[:50],
+                                "length_difference": len_diff
+                            }
+        else:
             resp_true = await client.get(url_true)
-            
-            url_false = f"{endpoint}?{param}={quote(false_payload)}"
             resp_false = await client.get(url_false)
             
             if resp_true and resp_false:
@@ -141,16 +200,24 @@ class SQLiScanner:
     
     async def test_time_based(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Time-based SQL injection detection"""
-        
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={quote(payload)}"
         times = []
         
         for _ in range(2):
-            async with HTTPClient(self.target, timeout=8, retries=1) as client:
-                url = f"{endpoint}?{param}={quote(payload)}"
-                start_time = time.perf_counter()
+            start_time = time.perf_counter()
+            
+            if not hasattr(client, 'session') or client.session is None:
+                async with client as ctx_client:
+                    response = await ctx_client.get(url)
+                    elapsed_ms = (time.perf_counter() - start_time) * 1000
+                    if response:
+                        times.append(elapsed_ms)
+                    else:
+                        return None
+            else:
                 response = await client.get(url)
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
-                
                 if response:
                     times.append(elapsed_ms)
                 else:
@@ -176,11 +243,33 @@ class SQLiScanner:
     
     async def test_union_based(self, endpoint: str, param: str, payload: str) -> Optional[Dict]:
         """Union-based SQL injection detection"""
+        client = await self._get_client()
+        url = f"{endpoint}?{param}={quote(payload)}"
         
-        async with HTTPClient(self.target, timeout=self.timeout, retries=1) as client:
-            url = f"{endpoint}?{param}={quote(payload)}"
+        if not hasattr(client, 'session') or client.session is None:
+            async with client as ctx_client:
+                response = await ctx_client.get(url)
+                if response:
+                    body = await response.text()
+                    
+                    patterns = [
+                        r'[a-zA-Z0-9_-]+@[a-zA-Z0-9_-]+\.[a-zA-Z]{2,}',
+                        r'root@localhost', 'mysql', 'postgres'
+                    ]
+                    
+                    for pattern in patterns:
+                        if re.search(pattern, body, re.IGNORECASE):
+                            return {
+                                "vulnerable": True,
+                                "type": "UNION_BASED_SQLI",
+                                "severity": "critical",
+                                "confidence": 95,
+                                "endpoint": endpoint,
+                                "parameter": param,
+                                "payload": payload[:50]
+                            }
+        else:
             response = await client.get(url)
-            
             if response:
                 body = await response.text()
                 
@@ -209,39 +298,47 @@ class SQLiScanner:
         
         # Layer 1: Error-based
         for payload in self.error_payloads:
+            self.stats['payloads_tested'] += 1
             result = await self.test_error_based(endpoint, param, payload)
             if result:
                 findings.append(result)
                 self.stats['vulnerabilities_found'] += 1
-                logger.finding(f"💎 SQLi on {endpoint} via {param}", "ERROR_BASED")
+                logger.info(f"💎 SQLi on {endpoint} via {param}: ERROR_BASED")
                 return findings
+            await asyncio.sleep(0.02)
         
         # Layer 2: Boolean-based
         for true_payload, false_payload in self.boolean_payloads:
+            self.stats['payloads_tested'] += 2
             result = await self.test_boolean_based(endpoint, param, true_payload, false_payload)
             if result:
                 findings.append(result)
                 self.stats['vulnerabilities_found'] += 1
-                logger.finding(f"🔴 Boolean SQLi on {endpoint} via {param}", "")
+                logger.info(f"🔴 Boolean SQLi on {endpoint} via {param}")
                 return findings
+            await asyncio.sleep(0.02)
         
         # Layer 3: Time-based
         for payload in self.time_payloads:
+            self.stats['payloads_tested'] += 1
             result = await self.test_time_based(endpoint, param, payload)
             if result:
                 findings.append(result)
                 self.stats['vulnerabilities_found'] += 1
-                logger.finding(f"🟠 Time-based SQLi on {endpoint} via {param}", "")
+                logger.info(f"🟠 Time-based SQLi on {endpoint} via {param}")
                 return findings
+            await asyncio.sleep(0.02)
         
         # Layer 4: Union-based
         for payload in self.union_payloads:
+            self.stats['payloads_tested'] += 1
             result = await self.test_union_based(endpoint, param, payload)
             if result:
                 findings.append(result)
                 self.stats['vulnerabilities_found'] += 1
-                logger.finding(f"💎 Union SQLi on {endpoint} via {param}", "")
+                logger.info(f"💎 Union SQLi on {endpoint} via {param}")
                 return findings
+            await asyncio.sleep(0.02)
         
         return findings
     
@@ -254,7 +351,7 @@ class SQLiScanner:
             endpoints = ["/", "/api", "/search", "/product", "/user", "/id"]
         
         total_tests = len(endpoints) * len(self.sqli_params) * (
-            len(self.error_payloads) + len(self.boolean_payloads) + 
+            len(self.error_payloads) + len(self.boolean_payloads) * 2 + 
             len(self.time_payloads) + len(self.union_payloads)
         )
         
@@ -275,11 +372,13 @@ class SQLiScanner:
             logger.info(f"\n📡 Testing endpoint: {endpoint}")
             
             for param in self.sqli_params:
-                self.stats['payloads_tested'] += 1
                 findings = await self.scan_endpoint(endpoint, param)
                 self.findings.extend(findings)
                 if findings:
                     logger.info(f"  ✅ Found SQLi via: {param}")
+                    # Break if found critical vulnerability
+                    if findings[0].get('severity') == 'critical':
+                        break
                 await asyncio.sleep(0.02)
             
             self.stats['endpoints_tested'] += 1
@@ -330,9 +429,19 @@ class SQLiScanner:
             "high_vulnerabilities": len(high_findings),
             "findings": self.findings
         }
+
+
+# ================================================================
+# MAIN RUN FUNCTION - MODIFIED FOR EXTERNAL CLIENT
+# ================================================================
+async def run(target: str, custom_endpoints: List[str] = None, client: HTTPClient = None) -> Dict:
+    """
+    Run SQL injection scanner - DRYBT SQL INJECTION SCANNER
     
-    @staticmethod
-    async def run(target: str, custom_endpoints: List[str] = None) -> Dict:
-        """Run SQL injection scanner"""
-        scanner = SQLiScanner(target)
-        return await scanner.scan(custom_endpoints)
+    Args:
+        target: Target URL
+        custom_endpoints: Custom endpoints to test (optional)
+        client: Optional external HTTPClient (for X-Bug-Bounty header)
+    """
+    scanner = SQLiScanner(target, client=client)
+    return await scanner.scan(custom_endpoints)
