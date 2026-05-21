@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-1win Bug Bounty Hunter - DRYBT Integration
-Target: 1win.com
-Cookie session disertakan
-Module: 8 module
+1win Bug Bounty Hunter - HIGH REWARD MODULES ONLY
+Target: 1win.com (single target)
+Module: sqli ($1500), lfi ($1200), ssrf ($1300), race_condition
+Timeout: 3 jam per module
 Rate limit: 5 request/detik
-Timeout: 2 jam per module
-Dilengkapi timer berjalan (live counter) per module
 """
 
 import subprocess
@@ -14,14 +12,13 @@ import sys
 import os
 import time
 import threading
-import json
 from datetime import datetime
 
 # ===== KONFIGURASI =====
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 DRYBT_MAIN = "main.py"
-RATE_DELAY = 0.2  # 5 request/detik
-TIMEOUT = 7200     # 2 jam per module
+RATE_DELAY = 0.2      # 5 request/detik
+TIMEOUT = 10800        # 3 jam (10800 detik)
 
 # ===== COOKIE SESSION DARI BROWSER =====
 COOKIE_STRING = "cda_session=fe8bd4c3-621f-47ce-9fc4-d08258a70747; session-id=26a27ccf-5454-516c-aeca-e32163b2a3f3; session-lax=1"
@@ -29,27 +26,19 @@ COOKIE_STRING = "cda_session=fe8bd4c3-621f-47ce-9fc4-d08258a70747; session-id=26
 # Header opsional untuk identifikasi
 HEADER_RESEARCHER = "X-HackerOne-Researcher: Dryex"
 
-# Module prioritas untuk 1win (8 module)
+# HANYA MODULE DENGAN REWARD TERTINGGI (4 module)
 MODULES = [
-    "param_discovery",
-    "sqli",
-    "lfi",
-    "ssrf",
-    "xss",
-    "csrf",
-    "cors",
-    "race_condition"
+    "sqli",           # $1500 - SQL Injection
+    "lfi",            # $1200 - LFI/RFI/XXE
+    "ssrf",           # $1300 - SSRF (non-blind)
+    "race_condition"  # Race condition (potensi high)
 ]
 
-# Target 1win
+# SINGLE TARGET (hanya 1win.com)
 TARGETS = [
-    "https://1win.com",
-    "https://1win.com/api",
-    "https://1win.com/en",
-    "https://1win.com/br"
+    "https://1win.com"
 ]
 
-# Flag untuk timer
 stop_timer = False
 
 def timer_display(module, target):
@@ -91,17 +80,14 @@ def scan_target(target, module):
     env["HTTP_COOKIE"] = COOKIE_STRING
     env["HTTP_X_HACKERONE_RESEARCHER"] = "Dryex"
     
-    print(f"\n[→] Target : {target}")
+    print(f"\n{'='*60}")
+    print(f"[→] Target : {target}")
     print(f"    Module : {module}")
     print(f"    Timeout: {TIMEOUT} detik ({TIMEOUT/60:.0f} menit = {TIMEOUT/3600:.1f} jam)")
-    print(f"    ⏱️  Timer mulai...")
+    print(f"{'='*60}")
     
     start = time.time()
-    
-    # Reset timer flag
     stop_timer = False
-    
-    # Jalankan timer di thread terpisah
     timer_thread = threading.Thread(target=timer_display, args=(module, target))
     timer_thread.daemon = True
     timer_thread.start()
@@ -115,7 +101,6 @@ def scan_target(target, module):
             timeout=TIMEOUT
         )
         
-        # Hentikan timer
         stop_timer = True
         timer_thread.join(timeout=1)
         
@@ -123,7 +108,7 @@ def scan_target(target, module):
         print(f"\n    ✓ Selesai dalam {duration:.2f} detik ({duration/60:.2f} menit)")
         
         # Simpan hasil
-        report_dir = "reports/1win1"
+        report_dir = "reports/1win_high"
         os.makedirs(report_dir, exist_ok=True)
         
         target_safe = target.replace('https://', '').replace('/', '_').replace('.', '_')
@@ -153,14 +138,13 @@ def scan_target(target, module):
         return True
         
     except subprocess.TimeoutExpired:
-        # Hentikan timer
         stop_timer = True
         timer_thread.join(timeout=1)
         
         print(f"\n    ⏱️ TIMEOUT setelah {TIMEOUT} detik ({TIMEOUT/60:.0f} menit)")
         
         # Tetap simpan laporan timeout
-        report_dir = "reports/1win1"
+        report_dir = "reports/1win_high"
         os.makedirs(report_dir, exist_ok=True)
         target_safe = target.replace('https://', '').replace('/', '_').replace('.', '_')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -185,16 +169,14 @@ def scan_target(target, module):
 def main():
     print("""
 ╔══════════════════════════════════════════════════════════════════════╗
-║                    1WIN BUG BOUNTY HUNTER                            ║
-║                        by Colin for Khan                             ║
+║              1WIN HIGH REWARD HUNTER (SINGLE TARGET)                 ║
 ║                                                                      ║
-║  Target    : 1win.com                                                ║
-║  Cookie    : cda_session, session-id, session-lax                    ║
-║  Header    : X-HackerOne-Researcher: Dryex                           ║
-║  Rate Limit: 5 request/detik (WAJIB!)                                ║
-║  Timeout   : 2 jam (7200 detik) per module                           ║
-║  Timer     : Live counter (HH:MM:SS) per module                      ║
-║  Module    : 8 module                                                ║
+║  Target    : https://1win.com                                       ║
+║  Module    : SQLi ($1500), LFI ($1200), SSRF ($1300)                ║
+║              race_condition                                          ║
+║  Rate Limit: 5 request/detik (WAJIB!)                               ║
+║  Timeout   : 3 jam (10800 detik) per module                         ║
+║  Timer     : Live counter (HH:MM:SS) per module                     ║
 ╚══════════════════════════════════════════════════════════════════════╝
     """)
     
@@ -207,8 +189,8 @@ def main():
     
     print(f"\n{'='*60}")
     print(f"[*] Cookie loaded : Yes")
-    print(f"[*] Total target  : {len(TARGETS)}")
-    print(f"[*] Total module  : {len(MODULES)}")
+    print(f"[*] Total target  : {len(TARGETS)} (single target)")
+    print(f"[*] Total module  : {len(MODULES)} (high reward only)")
     print(f"[*] Total scan    : {len(TARGETS) * len(MODULES)}")
     print(f"[*] Rate limit    : 5 req/detik")
     print(f"[*] Timeout       : {TIMEOUT} detik ({TIMEOUT/3600:.1f} jam)")
@@ -219,7 +201,7 @@ def main():
     print("    - Patuhi rate limit 5 request/detik!")
     print("    - Jangan akses data user lain!")
     print("    - Timer akan berjalan di samping output DRYBT")
-    print(f"    - Scan ini akan berlangsung ~8-10 jam")
+    print(f"    - Scan ini akan berlangsung ~{len(TARGETS) * len(MODULES) * 1.5:.1f}-{len(TARGETS) * len(MODULES) * 3:.1f} jam")
     print("\n[?] Tekan Enter untuk memulai scan, atau Ctrl+C batal...")
     input()
     
@@ -241,7 +223,7 @@ def main():
     print(f"    Sukses : {total_success}")
     print(f"    Timeout: {total_timeout}")
     print(f"    Total  : {len(TARGETS) * len(MODULES)}")
-    print(f"    Laporan di folder: reports/1win/")
+    print(f"    Laporan di folder: reports/1win_high/")
     print("="*60)
 
 if __name__ == "__main__":
