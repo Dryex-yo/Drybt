@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CLEAR Bug Bounty Scanner - Optimized for Kali Linux
+CLEAR Bug Bounty Scanner - Fixed (No Emoji)
 Target: https://www.clearme.com
 Header: X-Bug-Bounty: HackerOne-dryex
 """
@@ -18,10 +18,10 @@ from datetime import datetime
 TARGET = "https://www.clearme.com"
 HACKERONE_USERNAME = "dryex"
 
-# TIMEOUT SETTINGS (diperbesar untuk Kali)
-CONNECT_TIMEOUT = 15      # 15 detik untuk koneksi
-TOTAL_TIMEOUT = 45        # 45 detik total per request
-REQUEST_DELAY = 0.8       # delay antar request
+# TIMEOUT SETTINGS
+CONNECT_TIMEOUT = 15
+TOTAL_TIMEOUT = 45
+REQUEST_DELAY = 0.8
 
 HEADERS = {
     "X-Bug-Bounty": f"HackerOne-{HACKERONE_USERNAME}",
@@ -31,7 +31,7 @@ HEADERS = {
     "Connection": "keep-alive"
 }
 
-# Warna output (kompatibel dengan Kali)
+# Warna output (tanpa emoji)
 GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
@@ -47,7 +47,6 @@ class CLEARBountyScanner:
         self.session = None
         self.start_time = None
         
-        # Endpoints untuk discovery
         self.endpoints = [
             "/", "/api", "/v1", "/v2", "/api/v1", "/api/v2",
             "/graphql", "/gql", "/query",
@@ -59,7 +58,6 @@ class CLEARBountyScanner:
             "/.well-known/security.txt", "/security.txt"
         ]
         
-        # Parameter untuk testing
         self.params = ['id', 'debug', 'redirect', 'url', 'file']
         self.test_marker = f"DRYBT_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}"
         
@@ -74,8 +72,7 @@ class CLEARBountyScanner:
             limit=10,
             limit_per_host=5,
             ttl_dns_cache=300,
-            enable_cleanup_closed=True,
-            ssl=False  # Untuk Kali, kadang perlu
+            enable_cleanup_closed=True
         )
         
         self.session = aiohttp.ClientSession(
@@ -90,8 +87,7 @@ class CLEARBountyScanner:
         if self.session:
             await self.session.close()
     
-    async def request(self, method: str, path: str, **kwargs) -> Optional[aiohttp.ClientResponse]:
-        """Make request with retry and timeout handling"""
+    async def request(self, method: str, path: str, **kwargs):
         url = urljoin(self.target, path)
         
         for attempt in range(2):
@@ -99,15 +95,12 @@ class CLEARBountyScanner:
                 return await self.session.request(method, url, **kwargs)
             except asyncio.TimeoutError:
                 if attempt == 0:
-                    print(f"   {YELLOW}⏱️ Timeout on {path}, retrying...{RESET}")
+                    print(f"   {YELLOW}[!] Timeout on {path}, retrying...{RESET}")
                     await asyncio.sleep(2)
                 else:
-                    print(f"   {RED}❌ Timeout on {path} after 2 attempts{RESET}")
+                    print(f"   {RED}[X] Timeout on {path} after 2 attempts{RESET}")
                     return None
-            except aiohttp.ClientConnectorError as e:
-                print(f"   {YELLOW}🔌 Connection error on {path}: {str(e)[:50]}{RESET}")
-                return None
-            except Exception as e:
+            except Exception:
                 if attempt == 0:
                     await asyncio.sleep(1)
                 else:
@@ -115,8 +108,7 @@ class CLEARBountyScanner:
         return None
     
     async def test_clickjacking(self):
-        """Test X-Frame-Options missing"""
-        print(f"\n{BLUE}[1] 🔍 TESTING CLICKJACKING (X-Frame-Options){RESET}")
+        print(f"\n{BLUE}[1] TESTING CLICKJACKING (X-Frame-Options){RESET}")
         
         resp = await self.request("GET", "/")
         if resp:
@@ -130,24 +122,22 @@ class CLEARBountyScanner:
                     "endpoint": "/",
                     "details": "X-Frame-Options header missing"
                 })
-                print(f"   {RED}[!] VULNERABLE: No X-Frame-Options{RESET}")
+                print(f"   {RED}[VULNERABLE] No X-Frame-Options{RESET}")
                 
-                # Generate POC
                 poc = self.generate_clickjack_poc()
-                with open("clickjacking_poc.html", "w") as f:
+                with open("clickjacking_poc.html", "w", encoding="utf-8") as f:
                     f.write(poc)
-                print(f"   {YELLOW}   → POC saved: clickjacking_poc.html{RESET}")
+                print(f"   {YELLOW}   -> POC saved: clickjacking_poc.html{RESET}")
             elif xfo:
-                print(f"   {GREEN}[✓] Protected: X-Frame-Options: {xfo}{RESET}")
+                print(f"   {GREEN}[PROTECTED] X-Frame-Options: {xfo}{RESET}")
             else:
-                print(f"   {GREEN}[✓] Protected by CSP{RESET}")
+                print(f"   {GREEN}[PROTECTED] by CSP{RESET}")
         else:
             print(f"   {YELLOW}[?] Could not test (timeout/error){RESET}")
         
         await asyncio.sleep(REQUEST_DELAY)
     
     def generate_clickjack_poc(self):
-        """Generate HTML POC for clickjacking"""
         return f'''<!DOCTYPE html>
 <html>
 <head>
@@ -165,7 +155,7 @@ class CLEARBountyScanner:
 <body>
     <div class="container">
         <div class="info">
-            <h2>🎯 CLEAR Clickjacking Proof of Concept</h2>
+            <h2>CLEAR Clickjacking Proof of Concept</h2>
             <p>Target: https://www.clearme.com</p>
             <p>Status: <span class="warning">VULNERABLE</span> - No X-Frame-Options header</p>
             <p>Reported by: dryex (HackerOne)</p>
@@ -191,8 +181,7 @@ class CLEARBountyScanner:
 </html>'''
     
     async def scan_cors(self):
-        """Scan for CORS misconfigurations"""
-        print(f"\n{BLUE}[2] 🔍 SCANNING CORS...{RESET}")
+        print(f"\n{BLUE}[2] SCANNING CORS...{RESET}")
         
         test_endpoints = ["/", "/api", "/v1", "/graphql"]
         test_origins = ["https://evil.com", "null"]
@@ -212,31 +201,30 @@ class CLEARBountyScanner:
                                 "severity": "critical",
                                 "endpoint": endpoint
                             })
-                            print(f"   {RED}[!] CRITICAL: {endpoint} | ACAO: * | ACAC: true{RESET}")
+                            print(f"   {RED}[CRITICAL] {endpoint} | ACAO: * | ACAC: true{RESET}")
                         elif acao == origin:
                             cors_findings.append({
                                 "type": "CORS_REFLECTED_ORIGIN",
                                 "severity": "high",
                                 "endpoint": endpoint
                             })
-                            print(f"   {RED}[!] HIGH: {endpoint} reflects origin{RESET}")
+                            print(f"   {RED}[HIGH] {endpoint} reflects origin{RESET}")
                         elif acao == "null":
                             cors_findings.append({
                                 "type": "CORS_NULL_ORIGIN",
                                 "severity": "medium",
                                 "endpoint": endpoint
                             })
-                            print(f"   {YELLOW}[!] MEDIUM: {endpoint} accepts null origin{RESET}")
-                except Exception as e:
+                            print(f"   {YELLOW}[MEDIUM] {endpoint} accepts null origin{RESET}")
+                except Exception:
                     pass
                 await asyncio.sleep(0.5)
         
         self.findings.extend(cors_findings)
-        print(f"   {GREEN}✓ CORS scan complete.{RESET}")
+        print(f"   {GREEN}[DONE] CORS scan complete.{RESET}")
     
     async def discover_endpoints(self):
-        """Discover endpoints with timeout handling"""
-        print(f"\n{BLUE}[3] 🔍 ENDPOINT DISCOVERY...{RESET}")
+        print(f"\n{BLUE}[3] ENDPOINT DISCOVERY...{RESET}")
         
         discovered = []
         total = len(self.endpoints)
@@ -249,13 +237,13 @@ class CLEARBountyScanner:
                     "status": resp.status
                 })
                 if resp.status == 200:
-                    print(f"   {GREEN}✓ {endpoint} → {resp.status}{RESET}")
+                    print(f"   {GREEN}[FOUND] {endpoint} -> {resp.status}{RESET}")
                 else:
-                    print(f"   {YELLOW}🔒 {endpoint} → {resp.status} (auth required){RESET}")
+                    print(f"   {YELLOW}[AUTH] {endpoint} -> {resp.status} (auth required){RESET}")
             elif resp and resp.status == 404:
                 pass
             else:
-                print(f"   {BLUE}ℹ️ {endpoint} → timeout/error{RESET}")
+                print(f"   {BLUE}[SKIP] {endpoint} -> timeout/error{RESET}")
             
             if (i + 1) % 10 == 0:
                 print(f"   Progress: {i+1}/{total}")
@@ -268,12 +256,11 @@ class CLEARBountyScanner:
             "endpoints": discovered
         })
         
-        print(f"   {GREEN}✓ Discovered {len(discovered)} endpoints{RESET}")
+        print(f"   {GREEN}[DONE] Discovered {len(discovered)} endpoints{RESET}")
         return discovered
     
     async def check_info_disclosure(self):
-        """Check sensitive paths"""
-        print(f"\n{BLUE}[4] 🔍 INFO DISCLOSURE...{RESET}")
+        print(f"\n{BLUE}[4] INFO DISCLOSURE...{RESET}")
         
         sensitive_paths = [
             "/robots.txt", "/sitemap.xml", "/.env", "/config.json",
@@ -284,7 +271,7 @@ class CLEARBountyScanner:
             resp = await self.request("GET", path)
             if resp and resp.status == 200:
                 body = await resp.text()
-                print(f"   {YELLOW}[!] Accessible: {path} ({len(body)} bytes){RESET}")
+                print(f"   {YELLOW}[FOUND] {path} ({len(body)} bytes){RESET}")
                 self.findings.append({
                     "type": "INFO_DISCLOSURE",
                     "severity": "info",
@@ -294,16 +281,14 @@ class CLEARBountyScanner:
                 })
             await asyncio.sleep(REQUEST_DELAY)
         
-        print(f"   {GREEN}✓ Info disclosure check complete.{RESET}")
+        print(f"   {GREEN}[DONE] Info disclosure check complete.{RESET}")
     
     async def run(self):
-        """Run all modules"""
         self.start_time = time.time()
         
         print(f"""
 {CYAN}╔══════════════════════════════════════════════════════════════════╗
 ║                    CLEAR BUG BOUNTY SCANNER                        ║
-║                    Optimized for Kali Linux                        ║
 ║                         by dryex                                   ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Target: {self.target}
@@ -321,18 +306,18 @@ class CLEARBountyScanner:
         elapsed = time.time() - self.start_time
         
         print(f"\n{CYAN}{'='*60}")
-        print(f"📊 SCAN SUMMARY")
+        print(f"SCAN SUMMARY")
         print(f"{'='*60}{RESET}")
-        print(f"⏱️  Time: {elapsed:.2f} seconds")
+        print(f"Time: {elapsed:.2f} seconds")
         
         critical = [f for f in self.findings if f.get("severity") == "critical"]
         high = [f for f in self.findings if f.get("severity") == "high"]
         medium = [f for f in self.findings if f.get("severity") == "medium"]
         
-        print(f"\n💎 Critical: {len(critical)}")
-        print(f"🔴 High: {len(high)}")
-        print(f"🟠 Medium: {len(medium)}")
-        print(f"🔵 Info: {len(self.findings) - len(critical) - len(high) - len(medium)}")
+        print(f"\nCritical: {len(critical)}")
+        print(f"High: {len(high)}")
+        print(f"Medium: {len(medium)}")
+        print(f"Info: {len(self.findings) - len(critical) - len(high) - len(medium)}")
         
         report = {
             "target": self.target,
@@ -346,13 +331,13 @@ class CLEARBountyScanner:
             "findings": self.findings
         }
         
-        with open("clear_bounty_report.json", "w") as f:
+        with open("clear_bounty_report.json", "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         
-        print(f"\n{GREEN}✓ Report saved to: clear_bounty_report.json{RESET}")
+        print(f"\n{GREEN}[SAVED] Report: clear_bounty_report.json{RESET}")
         
         if any(f["type"] == "CLICKJACKING" for f in self.findings):
-            print(f"{GREEN}✓ Clickjacking POC saved to: clickjacking_poc.html{RESET}")
+            print(f"{GREEN}[SAVED] Clickjacking POC: clickjacking_poc.html{RESET}")
         
         print(f"{CYAN}{'='*60}{RESET}\n")
 
