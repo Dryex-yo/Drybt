@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-HTTP Client Module - Professional Grade
-Optimized: Concurrent, Rate Limiting, Retry Logic, Session Management
-MODIFIED: Mandatory X-Bug-Bounty header for CLEAR - Username: dryex
+HTTP Client Module - Professional Grade (SAFE MODE)
+Rate Limit: 0.1 req/sec | Max Concurrent: 2
 """
 
 import asyncio
@@ -14,8 +13,8 @@ from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urljoin
 
 class HTTPClient:
-    def __init__(self, base_url: str, timeout: int = 10, retries: int = 2,
-                 rate_limit: float = 0.3, max_concurrent: int = 50,
+    def __init__(self, base_url: str, timeout: int = 15, retries: int = 2,
+                 rate_limit: float = 0.1, max_concurrent: int = 2,
                  hackerone_username: str = None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
@@ -27,35 +26,32 @@ class HTTPClient:
         self.session = None
         self._closed = False
         
-        # CLEAR Bug Bounty header - Username: dryex
+        # CLEAR Bug Bounty header
         self.hackerone_username = hackerone_username or os.environ.get('HACKERONE_USERNAME', 'dryex')
         self.bug_bounty_header = f"HackerOne-{self.hackerone_username}"
         
-        # Professional user agents
+        # User agents
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/17.0',
         ]
         
-        # Default headers dengan X-Bug-Bounty untuk dryex
+        # Default headers dengan rate limiting aman
         self.default_headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
-            'X-Bug-Bounty': self.bug_bounty_header,  # MANDATORY: HackerOne-dryex
+            'X-Bug-Bounty': self.bug_bounty_header,
+            'X-Bugcrowd-Ninja': 'dryex',  # Untuk program Bugcrowd
+            'X-Request-Purpose': 'Research',  # Untuk Web.com
         }
         
-        print(f"[✓] HTTPClient initialized with X-Bug-Bounty: {self.bug_bounty_header}")
+        print(f"[✓] HTTPClient initialized (SAFE MODE)")
+        print(f"    Rate limit: {rate_limit} req/sec | Max concurrent: {max_concurrent}")
     
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(
@@ -67,7 +63,6 @@ class HTTPClient:
             enable_cleanup_closed=True
         )
         
-        # Rotate User-Agent tapi tetap pertahankan X-Bug-Bounty
         headers = self.default_headers.copy()
         headers['User-Agent'] = random.choice(self.user_agents)
         
@@ -90,39 +85,28 @@ class HTTPClient:
             self._closed = True
     
     async def _rate_limit(self):
-        """Adaptive rate limiting untuk menghindari block"""
+        """Adaptive rate limiting - SAFE MODE"""
         now = time.time()
         self._request_times = [t for t in self._request_times if now - t < 1]
         
-        if len(self._request_times) > 30:
-            wait_time = 0.05
-        elif len(self._request_times) > 50:
-            wait_time = 0.1
-        else:
-            wait_time = 1.0 / (self.rate_limit * max(len(self._request_times), 1)) if self._request_times else 0
+        # Safe: minimal 2 detik antar request
+        wait_time = max(2.0, 1.0 / self.rate_limit)
         
         if wait_time > 0:
-            await asyncio.sleep(min(wait_time, 0.5))
+            await asyncio.sleep(wait_time)
         
         self._request_times.append(now)
     
     def _merge_headers(self, custom_headers: Optional[Dict] = None) -> Dict:
-        """Merge custom headers dengan default headers, pastikan X-Bug-Bounty tetap ada"""
         merged_headers = self.default_headers.copy()
-        
         if custom_headers:
             merged_headers.update(custom_headers)
-        
-        # PASTIKAN X-Bug-Bounty selalu ada
         merged_headers['X-Bug-Bounty'] = self.bug_bounty_header
-        
         return merged_headers
     
     async def _request(self, method: str, path: str, **kwargs) -> Optional[aiohttp.ClientResponse]:
-        """Professional request handler dengan retry dan exponential backoff"""
         url = urljoin(self.base_url, path)
         
-        # Pastikan headers selalu mengandung X-Bug-Bounty
         if 'headers' in kwargs:
             kwargs['headers'] = self._merge_headers(kwargs['headers'])
         else:
