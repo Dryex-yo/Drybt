@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-HTTP Client Module - Professional Grade (SAFE MODE)
-Rate Limit: 0.1 req/sec | Max Concurrent: 2
+HTTP Client Module - Internet Brands Safe Mode
+Rate Limit: 0.3 req/sec | Max Concurrent: 2
 """
 
 import asyncio
@@ -14,8 +14,8 @@ from urllib.parse import urljoin
 
 class HTTPClient:
     def __init__(self, base_url: str, timeout: int = 15, retries: int = 2,
-                 rate_limit: float = 0.1, max_concurrent: int = 2,
-                 hackerone_username: str = None):
+                 rate_limit: float = 0.3, max_concurrent: int = 2,
+                 bugcrowd_username: str = None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.retries = retries
@@ -26,31 +26,23 @@ class HTTPClient:
         self.session = None
         self._closed = False
         
-        # CLEAR Bug Bounty header
-        self.hackerone_username = hackerone_username or os.environ.get('HACKERONE_USERNAME', 'dryex')
-        self.bug_bounty_header = f"HackerOne-{self.hackerone_username}"
+        self.bugcrowd_username = bugcrowd_username or os.environ.get('BUGCROWD_USERNAME', 'dryex')
         
-        # User agents
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
         ]
         
-        # Default headers dengan rate limiting aman
         self.default_headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0',
-            'X-Bug-Bounty': self.bug_bounty_header,
-            'X-Bugcrowd-Ninja': 'dryex',  # Untuk program Bugcrowd
-            'X-Request-Purpose': 'Research',  # Untuk Web.com
+            'X-Bugcrowd-Ninja': self.bugcrowd_username,
         }
         
-        print(f"[✓] HTTPClient initialized (SAFE MODE)")
+        print(f"[✓] HTTPClient initialized for Internet Brands")
         print(f"    Rate limit: {rate_limit} req/sec | Max concurrent: {max_concurrent}")
     
     async def __aenter__(self):
@@ -85,11 +77,10 @@ class HTTPClient:
             self._closed = True
     
     async def _rate_limit(self):
-        """Adaptive rate limiting - SAFE MODE"""
         now = time.time()
         self._request_times = [t for t in self._request_times if now - t < 1]
         
-        # Safe: minimal 2 detik antar request
+        # Minimal 2 detik antar request
         wait_time = max(2.0, 1.0 / self.rate_limit)
         
         if wait_time > 0:
@@ -101,7 +92,7 @@ class HTTPClient:
         merged_headers = self.default_headers.copy()
         if custom_headers:
             merged_headers.update(custom_headers)
-        merged_headers['X-Bug-Bounty'] = self.bug_bounty_header
+        merged_headers['X-Bugcrowd-Ninja'] = self.bugcrowd_username
         return merged_headers
     
     async def _request(self, method: str, path: str, **kwargs) -> Optional[aiohttp.ClientResponse]:
@@ -192,9 +183,3 @@ class HTTPClient:
             except:
                 return None
         return None
-    
-    async def head(self, path: str, **kwargs) -> Optional[aiohttp.ClientResponse]:
-        return await self._request('HEAD', path, **kwargs)
-    
-    async def options(self, path: str, **kwargs) -> Optional[aiohttp.ClientResponse]:
-        return await self._request('OPTIONS', path, **kwargs)
